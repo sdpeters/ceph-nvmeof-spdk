@@ -184,7 +184,7 @@ bdev_part_io_type_supported(void *_part, enum spdk_bdev_io_type io_type)
 	case SPDK_BDEV_IO_TYPE_NVME_IO_MD:
 		return false;
 	case SPDK_BDEV_IO_TYPE_NVME_ADMIN:
-		/* passthru NVME admin when partition is entire base bdev (and base suports it) */
+		/* passthru NVME admin when partition is entire base bdev (and base supports it) */
 		if (!spdk_bdev_part_is_entire_base(part)) {
 			return false;
 		}

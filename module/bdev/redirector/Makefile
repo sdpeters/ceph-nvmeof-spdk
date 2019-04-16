@@ -31,31 +31,17 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
+SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-DIRS-y += delay error gpt lvol malloc null nvme passthru raid redirector rpc split zone_block
+SO_VER := 2
+SO_MINOR := 0
 
-DIRS-$(CONFIG_CRYPTO) += crypto
+CFLAGS += -I$(SPDK_ROOT_DIR)/lib/bdev/ -I$(SPDK_ROOT_DIR)/lib/util/
 
-DIRS-$(CONFIG_OCF) += ocf
+C_SRCS = vbdev_redirector.c vbdev_redirector_data_plane.c vbdev_redirector_enum_names.c vbdev_redirector_targets.c vbdev_redirector_target_state.c vbdev_redirector_target_admin_cmd.c vbdev_redirector_rule_table.c vbdev_redirector_hints.c vbdev_redirector_hint_learning.c vbdev_redirector_nvme_hints.c vbdev_redirector_process_nvme_admin.c vbdev_redirector_rpc.c vbdev_redirector_null_hash.c vbdev_redirector_ceph_hash.c vbdev_redirector_channel.c vbdev_redirector_json.c
+LIBNAME = bdev_redirector
 
-DIRS-$(CONFIG_REDUCE) += compress
+SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
 
-DIRS-$(CONFIG_URING) += uring
-
-ifeq ($(OS),Linux)
-DIRS-y += aio ftl
-DIRS-$(CONFIG_ISCSI_INITIATOR) += iscsi
-DIRS-$(CONFIG_VIRTIO) += virtio
-DIRS-$(CONFIG_PMDK) += pmem
-endif
-
-DIRS-$(CONFIG_RBD) += rbd
-
-.PHONY: all clean $(DIRS-y)
-
-all: $(DIRS-y)
-clean: $(DIRS-y)
-
-include $(SPDK_ROOT_DIR)/mk/spdk.subdirs.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.lib.mk

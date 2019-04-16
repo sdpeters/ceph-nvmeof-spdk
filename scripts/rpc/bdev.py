@@ -776,6 +776,166 @@ def bdev_passthru_delete(client, name):
     return client.call('bdev_passthru_delete', params)
 
 
+def construct_redirector_bdev(client, name, default_target_names, size_configured, blockcnt, blocklen,
+                              optimal_io_boundary, required_alignment, uuid=None, nqn=None):
+    """Construct a redirector.
+
+    Args:
+        name: name of redirector
+        default_target_names: names of the default targets
+        size_configured: true if redirector size is configured
+        blockcnt: Redirector length in blocks
+        blocklen: Redirector block length in bytes
+        optimal_io_boundary: Redirector optimal IO boundary in bytes
+        required_alignment: Redirector required IO alignment in bytes
+        uuid: UUID of redirector (optional)
+        nqn: NQN of target exposing redirector, for use by local (bdev) client redirectors (optional)
+
+    Returns:
+        bool: true.
+    """
+    params = {
+        'name': name,
+        'default_target_names': default_target_names,
+        'size_configured': size_configured,
+        'blockcnt': blockcnt,
+        'blocklen': blocklen,
+        'optimal_io_boundary': optimal_io_boundary,
+        'required_alignment': required_alignment,
+    }
+    if uuid:
+        params['uuid'] = uuid
+    if nqn:
+        params['nqn'] = nqn
+    return client.call('construct_redirector_bdev', params)
+
+
+def delete_redirector_bdev(client, name):
+    """Remove redirector bdev from the system.
+
+    Args:
+        name: name of redirector bdev to delete
+    """
+    params = {'name': name}
+    return client.call('delete_redirector_bdev', params)
+
+
+def redirector_add_target(client, redirector, target, persistent_config, required, is_redirector, dont_probe):
+    """Add a target to a redirector.
+
+    Args:
+        redirector: The name of the redirector
+        target: The name of the target bdev
+        persistent_config: True if the target is persisted in the redirector config
+        required: True if the target must be up before the redirector can come up
+        is_redirector: True if the target is another redirector (can complete IO to entire namespace)
+        dont_probe: True if target is not probed to determine if it's a redirector
+
+    Returns:
+        bool: true
+    """
+    params = {'redirector': redirector,
+              'target': target,
+              'persistent_config': persistent_config,
+              'required': required,
+              'is_redirector': is_redirector,
+              'dont_probe': dont_probe}
+    return client.call('redirector_add_target', params)
+
+
+def redirector_remove_target(client, redirector, target, retain_hints):
+    """Add a target to a redirector.
+
+    Args:
+        redirector: The name of the redirector
+        target: The name of the target bdev
+        retain_hints: If false, location hints naming this target may be removed
+
+    Returns:
+        bool: true
+    """
+    params = {'redirector': redirector,
+              'target': target,
+              'retain_hints': retain_hints}
+    return client.call('redirector_remove_target', params)
+
+
+def redirector_add_hint(client, redirector, target, start_lba, blocks, target_start_lba, persistent_config, authoritative):
+    """Add a location hint to a redirector.
+
+    Args:
+        redirector: The name of the redirector
+        target: The name of the target bdev
+        start_lba: The first LBA affected by this location hint
+        blocks: The number of blocks the location hint applies to (0 == all blocks to end of namespace)
+        target_start_lba: The first LBA of the affected region on the target (0 if target is a redirector)
+        persistent_config: True if the hint is persisted in the redirector config
+        authoritative: If true, the hint will not be overridden by any non-authoritative hints
+
+    Returns:
+        bool: true
+    """
+    params = {'redirector': redirector,
+              'target': target,
+              'start_lba': start_lba,
+              'blocks': blocks,
+              'target_start_lba': target_start_lba,
+              'persistent_config': persistent_config,
+              'authoritative': authoritative}
+    return client.call('redirector_add_hint', params)
+
+
+def redirector_remove_hint(client, redirector, target, start_lba, blocks):
+    """Remove a location hint from a redirector.
+
+    Args:
+        redirector: The name of the redirector
+        target: The name of the target bdev
+        start_lba: The first LBA affected by this location hint
+        blocks: The number of blocks the location hint applies to (0 == all blocks to end of namespace)
+
+    Returns:
+        bool: true
+    """
+    params = {'redirector': redirector,
+              'target': target,
+              'start_lba': start_lba,
+              'blocks': blocks}
+    return client.call('redirector_remove_hint', params)
+
+
+def redirector_add_hash_hint(client, redirector, hash_hint_file, persistent_config, authoritative):
+    """Add a location hint to a redirector.
+
+    Args:
+        redirector: The name of the redirector
+        hash_hint_file: JSON file with hash hint parameters for this RBD image
+        persistent_config: True if the hint is persisted in the redirector config
+        authoritative: If true, the hint will not be overridden by any non-authoritative hints
+
+    Returns:
+        bool: true
+    """
+    params = {'redirector': redirector,
+              'hash_hint_file': hash_hint_file,
+              'persistent_config': persistent_config,
+              'authoritative': authoritative}
+    return client.call('redirector_add_hash_hint', params)
+
+
+def redirector_remove_hash_hint(client, redirector):
+    """Remove the consistent hash location hint from a redirector.
+
+    Args:
+        redirector: The name of the redirector
+
+    Returns:
+        bool: true
+    """
+    params = {'redirector': redirector}
+    return client.call('redirector_remove_hash_hint', params)
+
+
 def bdev_opal_create(client, nvme_ctrlr_name, nsid, locking_range_id, range_start, range_length, password):
     """Create opal virtual block devices from a base nvme bdev.
 

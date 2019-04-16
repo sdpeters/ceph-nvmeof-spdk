@@ -228,6 +228,10 @@ endif
 COMMON_CFLAGS += -pthread
 LDFLAGS += -pthread
 
+COMMON_CFLAGS += $(shell pkg-config --cflags --libs gmodule-2.0)
+SYS_LIBS += -lgmodule-2.0
+SYS_LIBS += -lglib-2.0
+
 CFLAGS   += $(COMMON_CFLAGS) -Wno-pointer-sign -Wstrict-prototypes -Wold-style-definition -std=gnu99
 CXXFLAGS += $(COMMON_CFLAGS)
 

@@ -708,6 +708,189 @@ if __name__ == "__main__":
     p.add_argument('name', help='pass through bdev name')
     p.set_defaults(func=bdev_passthru_delete)
 
+    # Redirector
+    def construct_redirector_bdev(args):
+        size_configured = False
+        blockcnt = 0
+        if args.blockcnt is not None:
+            size_configured = True
+            blockcnt = args.blockcnt
+        blocklen = 512
+        if args.blocklen is not None:
+            blocklen = args.blocklen
+        required_alignment = blocklen
+        if args.required_alignment is not None:
+            required_alignment = args.required_alignment
+        optimal_io_boundary = (64 * 1024)
+        if args.optimal_io_boundary is not None:
+            optimal_io_boundary = args.optimal_io_boundary
+        default_target_names = []
+        for u in args.default_targets.strip().split(" "):
+            default_target_names.append(u)
+
+        print(rpc.bdev.construct_redirector_bdev(args.client,
+                                                 name=args.name,
+                                                 default_target_names=default_target_names,
+                                                 size_configured=size_configured,
+                                                 blockcnt=blockcnt,
+                                                 blocklen=blocklen,
+                                                 optimal_io_boundary=optimal_io_boundary,
+                                                 required_alignment=required_alignment,
+                                                 uuid=args.uuid,
+                                                 nqn=args.nqn))
+
+    p = subparsers.add_parser('construct_redirector_bdev',
+                              help='Add a redirector')
+    p.add_argument('-n', '--name', help="Name of the redirector bdev", required=True)
+    p.add_argument('-u', '--uuid', help="UUID of the redirector bdev")
+    p.add_argument('-t', '--nqn', help="NQN of the target exposing the redirector bdev")
+    p.add_argument('-d', '--default-targets', help="Existing bdev names, whitespace separated list in quotes", required=True)
+    p.add_argument('--blockcnt', help="Size in blocks of this redirector (omit to inherit from default redirector)", type=lambda x: int(x, 0))
+    p.add_argument('--blocklen', help="Block size in bytes. Default is 512, or inherited with blockcnt.", type=lambda x: int(x, 0))
+    p.add_argument('--required_alignment', help="Required alignment in bytes. Default is block size or inherited with blockcnt", type=lambda x: int(x, 0))
+    p.add_argument('--optimal_io_boundary', help="Optimal IO alignment in bytes. Default is 64K, or inherit with blockcnt", type=lambda x: int(x, 0))
+    p.set_defaults(func=construct_redirector_bdev)
+
+    def delete_redirector_bdev(args):
+        rpc.bdev.delete_redirector_bdev(args.client,
+                                        name=args.name)
+
+    p = subparsers.add_parser('delete_redirector_bdev', help='Delete a redirector')
+    p.add_argument('name', help='redirector name')
+    p.set_defaults(func=delete_redirector_bdev)
+
+    # Redirector targets
+    def redirector_add_target(args):
+        persist = False
+        required = False
+        is_redirector = False
+        dont_probe = False
+        if args.persist:
+            persist = True
+        if args.required:
+            required = True
+        if args.is_redirector:
+            is_redirector = True
+        if args.dont_probe:
+            dont_probe = True
+        print(rpc.bdev.redirector_add_target(args.client,
+                                             redirector=args.redirector,
+                                             target=args.target,
+                                             persistent_config=persist,
+                                             required=required,
+                                             is_redirector=is_redirector,
+                                             dont_probe=dont_probe))
+
+    p = subparsers.add_parser('redirector_add_target',
+                              help='Add a target to an existing redirector')
+    p.add_argument('-r', '--redirector', help="Name of the existing redirector bdev", required=True)
+    p.add_argument('-t', '--target', help="Name of the target bdev", required=True)
+    p.add_argument('-p', '--persist', help="Target persists in redirector config", action='store_true')
+    p.add_argument('-s', '--required', help="Target required to start redirector", action='store_true')
+    p.add_argument('-i', '--is_redirector', help="Target is another redirector", action='store_true')
+    p.add_argument('-n', '--dont_probe', help="Don't probe this target to determine if it's a redirector", action='store_true')
+    p.set_defaults(func=redirector_add_target)
+
+    def redirector_remove_target(args):
+        retain_hints = False
+        if args.retain_hints:
+            retain_hints = True
+        print(rpc.bdev.redirector_remove_target(args.client,
+                                                redirector=args.redirector,
+                                                target=args.target,
+                                                retain_hints=retain_hints))
+
+    p = subparsers.add_parser('redirector_remove_target',
+                              help='Remove a target from a redirector')
+    p.add_argument('-r', '--redirector', help="Name of the existing redirector bdev", required=True)
+    p.add_argument('-t', '--target', help="Name of the target bdev", required=True)
+    p.add_argument('-k', '--retain_hints', help="Keep location hints naming this target", action='store_true')
+    p.set_defaults(func=redirector_remove_target)
+
+    # Redirector hints
+    def redirector_add_hint(args):
+        persist = False
+        authoritative = False
+        target_start_lba = args.start_lba
+        # We may be overriding a nonzero default with zero here
+        if args.target_start_lba is not None:
+            target_start_lba = args.target_start_lba
+        if args.persist:
+            persist = True
+        if args.authoritative:
+            authoritative = True
+        print(rpc.bdev.redirector_add_hint(args.client,
+                                           redirector=args.redirector,
+                                           target=args.target,
+                                           start_lba=args.start_lba,
+                                           blocks=args.blocks,
+                                           target_start_lba=target_start_lba,
+                                           persistent_config=persist,
+                                           authoritative=authoritative))
+
+    p = subparsers.add_parser('redirector_add_hint',
+                              help='Add a location hint to a redirector')
+    p.add_argument('-r', '--redirector', help="Name of the existing redirector bdev", required=True)
+    p.add_argument('-t', '--target', help="Name of the target bdev", required=True)
+    # TODO: These are both uint64, not signed int of uncertain size
+    p.add_argument('-s', '--start_lba', help="First LBA the hint applies to", required=True, type=lambda x: int(x, 0))
+    p.add_argument('-b', '--blocks', help="Number of blocks the hint applies to", required=True, type=lambda x: int(x, 0))
+    p.add_argument('-o', '--target_start_lba', help="First LBA on the target of the region the hint refers to",
+                   required=False, type=lambda x: int(x, 0))
+    p.add_argument('-p', '--persist', help="Hint persists in redirector config", action='store_true')
+    p.add_argument('-a', '--authoritative', help="Hint not overridden by learned hints", action='store_true')
+    p.set_defaults(func=redirector_add_hint)
+
+
+    def redirector_remove_hint(args):
+        print(rpc.bdev.redirector_remove_hint(args.client,
+                                              redirector=args.redirector,
+                                              target=args.target,
+                                              start_lba=args.start_lba,
+                                              blocks=args.blocks))
+
+    p = subparsers.add_parser('redirector_remove_hint',
+                              help='Remove a location hint from a redirector')
+    p.add_argument('-r', '--redirector', help="Name of the existing redirector bdev", required=True)
+    p.add_argument('-t', '--target', help="Name of the target bdev", required=True)
+    # TODO: These are both uint64, not signed int of uncertain size
+    p.add_argument('-s', '--start_lba', help="First LBA the hint applies to", required=True, type=lambda x: int(x, 0))
+    p.add_argument('-b', '--blocks', help="Number of blocks the hint applies to", required=True, type=lambda x: int(x, 0))
+    p.set_defaults(func=redirector_remove_hint)
+
+
+    # Redirector hashing hints
+    def redirector_add_hash_hint(args):
+        persist = False
+        authoritative = False
+        if args.persist:
+            persist = True
+        if args.authoritative:
+            authoritative = True
+        print(rpc.bdev.redirector_add_hash_hint(args.client,
+                                                redirector=args.redirector,
+                                                hash_hint_file=args.hash_hint_file,
+                                                persistent_config=persist,
+                                                authoritative=authoritative))
+
+    p = subparsers.add_parser('redirector_add_hash_hint',
+                              help='Add/replace a considtent hash location hint to a redirector')
+    p.add_argument('-r', '--redirector', help="Name of the existing redirector bdev", required=True)
+    p.add_argument('-f', '--hash_hint_file', help="Name of the RBD hash hint file", required=True)
+    p.add_argument('-p', '--persist', help="Hint persists in redirector config", action='store_true')
+    p.add_argument('-a', '--authoritative', help="Hint not overridden by learned hints", action='store_true')
+    p.set_defaults(func=redirector_add_hash_hint)
+
+    def redirector_remove_hash_hint(args):
+        print(rpc.bdev.redirector_remove_hash_hint(args.client,
+                                                   redirector=args.redirector))
+
+    p = subparsers.add_parser('redirector_remove_hash_hint',
+                              help='Remove the consistent hash location hint from a redirector')
+    p.add_argument('-r', '--redirector', help="Name of the existing redirector bdev", required=True)
+    p.set_defaults(func=redirector_remove_hash_hint)
+
+
     def bdev_get_bdevs(args):
         print_dict(rpc.bdev.bdev_get_bdevs(args.client,
                                            name=args.name))

@@ -30,8 +30,12 @@ declare -A app_socket=([target]='/var/tmp/spdk_tgt.sock' [initiator]='/var/tmp/s
 declare -A app_params=([target]='-m 0x1 -s 1024' [initiator]='-m 0x2 -g -u -s 1024')
 declare -A configs_path=([target]="$rootdir/spdk_tgt_config.json" [initiator]="$rootdir/spdk_initiator_config.json")
 
+if [ -n "$PAUSE_FOR_DEBUGGER" ]; then
+    rpc_timeout_arg="-t 3600"
+fi
+
 function tgt_rpc() {
-	$rootdir/scripts/rpc.py -s "${app_socket[target]}" "$@"
+	$rootdir/scripts/rpc.py ${rpc_timeout_arg} -s "${app_socket[target]}" "$@"
 }
 
 function initiator_rpc() {
@@ -163,35 +167,93 @@ function create_bdev_subsystem_config() {
 			fi
 		fi
 
+		local tgt_pid=${app_pid[target]}
+		echo spdk_tgt PID is $tgt_pid
+		if [ -n "$PAUSE_FOR_DEBUGGER" ]; then
+			echo "===== attach gdb to PID ${tgt_pid} now ..."
+			read
+		fi
+
+		tgt_rpc set_log_print_level DEBUG
+		tgt_rpc set_log_flag bdev
+		tgt_rpc set_log_flag bdev_null
+		#tgt_rpc set_log_flag vbdev_split
+		#echo set_log_flag bdev_malloc
+		#tgt_rpc set_log_flag vbdev_passthru
+		tgt_rpc set_log_flag vbdev_redirector
+
 		tgt_rpc bdev_split_create $lvol_store_base_bdev 2
 		tgt_rpc bdev_split_create Malloc0 3
 		tgt_rpc bdev_malloc_create 8 4096 --name Malloc3
 		tgt_rpc bdev_passthru_create -b Malloc3 -p PTBdevFromMalloc3
 
-		tgt_rpc bdev_null_create Null0 32 512
+		local rd_size_mb=64
+		local rd_size_bytes=$( expr $rd_size_mb \* 1024 \* 1024 )
+		local rd_block_size=512
+		local rd_io_boundary=$( expr 4 \* 1024 \* 1024 )
+		local rd_block_count=$( expr $rd_size_bytes / $rd_block_size )
+		local malloc_size_mb=$( expr $rd_size_mb / 2 )
+		local malloc_size_bytes=$( expr $malloc_size_mb \* 1024 \* 1024 )
+		local malloc_block_count=$( expr $malloc_size_bytes / $rd_block_size )
+
+		tgt_rpc construct_redirector_bdev -d "Null0" --uuid c119038a-54ab-463a-aa86-f0fc3db84b49 --nqn nqn.2018-09.io.spdk:something.plausible -n RDBdev --blocklen ${rd_block_size} --blockcnt ${rd_block_count}
+		tgt_rpc redirector_add_target --redirector RDBdev --target MallocRD0 --required --persist
+		tgt_rpc redirector_add_target --redirector RDBdev --target MallocRD1 --required --persist
+		#TempRedir will never actually be created
+		tgt_rpc redirector_add_target --redirector RDBdev --target TempRedir --is_redirector
+		tgt_rpc redirector_add_hint --redirector RDBdev --target TempRedir --start_lba 1 --blocks 1 --persist
+		tgt_rpc redirector_add_hint --redirector RDBdev --target TempRedir --start_lba 0x10 --blocks 1 --persist
+		tgt_rpc redirector_remove_hint --redirector RDBdev --target TempRedir --start_lba 1 --blocks 1
+		tgt_rpc redirector_remove_target --redirector RDBdev --target TempRedir
+		tgt_rpc redirector_add_hint --redirector RDBdev --target MallocRD0 --start_lba 0 --blocks ${malloc_block_count} --authoritative --persist
+		tgt_rpc redirector_add_hint --redirector RDBdev --target MallocRD1 --start_lba ${malloc_block_count} --blocks ${malloc_block_count} --target_start_lba 0 --authoritative --persist
+
+		tgt_rpc bdev_null_create Null0 ${rd_size_mb} ${rd_block_size}
 
 		tgt_rpc bdev_malloc_create 32 512 --name Malloc0
 		tgt_rpc bdev_malloc_create 16 4096 --name Malloc1
 
+		tgt_rpc bdev_malloc_create ${malloc_size_mb} ${rd_block_size} --name MallocRD0
+		tgt_rpc bdev_malloc_create ${malloc_size_mb} ${rd_block_size} --name MallocRD1
+		tgt_rpc redirector_add_hash_hint --redirector RDBdev --hash_hint_file $rootdir/test/json_config/test_hash_hint.json --persist
+		tgt_rpc redirector_remove_hash_hint --redirector RDBdev
+		tgt_rpc redirector_add_hash_hint --redirector RDBdev --hash_hint_file $rootdir/test/json_config/test_hash_hint.json --persist
+
+		if [[ $lvol_store_base_bdev != aio_disk ]]; then
+			expected_notifications+=(
+				bdev_register:${lvol_store_base_bdev}
+				bdev_register:${lvol_store_base_bdev}p0
+				bdev_register:${lvol_store_base_bdev}p1
+			)
+		fi
+
 		expected_notifications+=(
-			bdev_register:${lvol_store_base_bdev}
-			bdev_register:${lvol_store_base_bdev}p0
-			bdev_register:${lvol_store_base_bdev}p1
 			bdev_register:Malloc3
 			bdev_register:PTBdevFromMalloc3
+			bdev_register:RDBdev
 			bdev_register:Null0
 			bdev_register:Malloc0p0
 			bdev_register:Malloc0p1
 			bdev_register:Malloc0p2
 			bdev_register:Malloc0
 			bdev_register:Malloc1
+			bdev_register:MallocRD0
+			bdev_register:MallocRD1
 		)
 
 		if [[ $(uname -s) = Linux ]]; then
 			# This AIO bdev must be large enough to be used as LVOL store
 			dd if=/dev/zero of="$SPDK_TEST_STORAGE/sample_aio" bs=1024 count=102400
 			tgt_rpc bdev_aio_create "$SPDK_TEST_STORAGE/sample_aio" aio_disk 1024
-			expected_notifications+=(bdev_register:aio_disk)
+			if [[ $lvol_store_base_bdev == aio_disk ]]; then
+				expected_notifications+=(
+					bdev_register:aio_diskp0
+					bdev_register:aio_diskp1
+				)
+			fi
+			expected_notifications+=(
+				bdev_register:aio_disk
+			)
 		fi
 
 		# For LVOLs use split to check for proper order of initialization.
@@ -241,6 +303,29 @@ function create_bdev_subsystem_config() {
 	fi
 
 	tgt_check_notifications "${expected_notifications[@]}"
+
+	if [[ $SPDK_TEST_BLOCKDEV -eq 1 ]]; then
+	    tgt_rpc redirector_add_target --redirector RDBdev --target TempRedir --is_redirector
+
+        # Remove one of the simple auth hints so the hash hint appears in the applied hints
+	    tgt_rpc redirector_remove_hint --redirector RDBdev --target MallocRD1 --start_lba ${malloc_block_count} --blocks ${malloc_block_count}
+
+		# Construct dummy targets for hash hint with the right NQNs (from the hash hint params file)
+        tgt_rpc construct_null_bdev NullHash0 ${rd_size_mb} ${rd_block_size}
+		tgt_rpc construct_redirector_bdev -d "NullHash0" --uuid c119038a-54ab-463a-aa86-f0fc3db84b49 --nqn nqn.2019-11-14.com.intel.nemo:node1-rdma -n RDHashTgt0 --blocklen ${rd_block_size} --blockcnt ${rd_block_count}
+		tgt_rpc redirector_add_target --redirector RDBdev --target RDHashTgt0
+
+        tgt_rpc construct_null_bdev NullHash1 ${rd_size_mb} ${rd_block_size}
+		tgt_rpc construct_redirector_bdev -d "NullHash1" --uuid c119038a-54ab-463a-aa86-f0fc3db84b49 --nqn nqn.2019-11-14.com.intel.nemo:node2-rdma -n RDHashTgt1 --blocklen ${rd_block_size} --blockcnt ${rd_block_count}
+		tgt_rpc redirector_add_target --redirector RDBdev --target RDHashTgt1
+
+        tgt_rpc construct_null_bdev NullHash2 ${rd_size_mb} ${rd_block_size}
+		tgt_rpc construct_redirector_bdev -d "NullHash2" --uuid c119038a-54ab-463a-aa86-f0fc3db84b49 --nqn nqn.2019-11-14.com.intel.nemo:node3-rdma -n RDHashTgt2 --blocklen ${rd_block_size} --blockcnt ${rd_block_count}
+		tgt_rpc redirector_add_target --redirector RDBdev --target RDHashTgt2
+
+        tgt_rpc redirector_remove_target --redirector RDBdev --target TempRedir
+        tgt_rpc get_bdevs >/tmp/json_config_bdevs
+    fi
 
 	timing_exit "${FUNCNAME[0]}"
 }
@@ -392,7 +477,7 @@ function json_config_test_fini() {
 		killprocess ${app_pid[target]}
 	fi
 
-	rm -f "${configs_path[@]}"
+	#rm -f "${configs_path[@]}"
 	timing_exit "${FUNCNAME[0]}"
 	return $ret
 }

@@ -1,0 +1,12 @@
+A few example property (properties-*.json) and hint (hint-*.json) files are
+included here, from three different RBD images on a 3-node Ceph cluster.
+
+The *rbd-test-image0.json files are for an image in the default rbd pool. The
+*rbd2-test-image0.json files are for an image in an alternate OSD pool on that
+cluster named rbd2. The *rbd2-ns2-test-image0.json files are for an image in
+the namespace named ns2 in the pool named rbd2. Namespace here means the RBD
+image namespace, which is unrelated to NVMe namespaces.
+
+These property and hint files will not work on any other Ceph cluster. They're
+included here to show you what they shold look like, and how pool and namespace
+names in the imagespec affect the contents of the hint file.
