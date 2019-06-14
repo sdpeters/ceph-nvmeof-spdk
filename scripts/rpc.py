@@ -1542,7 +1542,8 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
         print_array(rpc.bdev.bdev_split_create(args.client,
                                                base_bdev=args.base_bdev,
                                                split_count=args.split_count,
-                                               split_size_mb=args.split_size_mb))
+                                               split_size_mb=args.split_size_mb,
+                                               share=args.share))
 
     p = subparsers.add_parser('bdev_split_create', aliases=['construct_split_vbdev'],
                               help="""Add given disk name to split config. If bdev with base_name
@@ -1552,6 +1553,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-s', '--split-size-mb', help='size in MiB for each bdev', type=int, default=0)
     p.add_argument('split_count', help="""Optional - number of split bdevs to create. Total size * split_count must not
     exceed the base bdev size.""", type=int)
+    p.add_argument('-r', '--share', help="Share base bdev n ways instead of splitting", action='store_true')
     p.set_defaults(func=bdev_split_create)
 
     def bdev_split_delete(args):

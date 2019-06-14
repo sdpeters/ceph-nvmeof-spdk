@@ -163,6 +163,14 @@ spdk_bdev_part_base_hotremove(struct spdk_bdev_part_base *part_base, struct bdev
 }
 
 static bool
+spdk_bdev_part_is_entire_base(struct spdk_bdev_part *part)
+{
+	assert(part->internal.base);
+	return ((part->internal.offset_blocks == 0) &&
+		(part->internal.bdev.blockcnt == part->internal.base->bdev->blockcnt));
+}
+
+static bool
 bdev_part_io_type_supported(void *_part, enum spdk_bdev_io_type io_type)
 {
 	struct spdk_bdev_part *part = _part;
@@ -172,10 +180,15 @@ bdev_part_io_type_supported(void *_part, enum spdk_bdev_io_type io_type)
 	 *  bdev does.
 	 */
 	switch (io_type) {
-	case SPDK_BDEV_IO_TYPE_NVME_ADMIN:
 	case SPDK_BDEV_IO_TYPE_NVME_IO:
 	case SPDK_BDEV_IO_TYPE_NVME_IO_MD:
 		return false;
+	case SPDK_BDEV_IO_TYPE_NVME_ADMIN:
+		/* passthru NVME admin when partition is entire base bdev (and base suports it) */
+		if (!spdk_bdev_part_is_entire_base(part)) {
+			return false;
+		}
+		break;
 	default:
 		break;
 	}
@@ -367,6 +380,13 @@ spdk_bdev_part_submit_request(struct spdk_bdev_part_channel *ch, struct spdk_bde
 		rc = spdk_bdev_flush_blocks(base_desc, base_ch, remapped_offset,
 					    bdev_io->u.bdev.num_blocks, bdev_part_complete_io,
 					    bdev_io);
+		break;
+	case SPDK_BDEV_IO_TYPE_NVME_ADMIN:
+		rc = spdk_bdev_nvme_admin_passthru(base_desc, base_ch,
+						   &bdev_io->u.nvme_passthru.cmd,
+						   bdev_io->u.nvme_passthru.buf,
+						   bdev_io->u.nvme_passthru.nbytes,
+						   bdev_part_complete_io, bdev_io);
 		break;
 	case SPDK_BDEV_IO_TYPE_RESET:
 		rc = spdk_bdev_reset(base_desc, base_ch,

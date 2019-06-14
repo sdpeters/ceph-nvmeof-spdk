@@ -44,9 +44,11 @@
  * \param base_bdev_name Base bdev name
  * \param split_count number of splits to be created.
  * \param split_size_mb size of each bdev. If 0 use base bdev size / split_count
+ * \param share Share base n ways instead of splitting
  * \return value >= 0 - number of splits create. Negative errno code on error.
  */
-int create_vbdev_split(const char *base_bdev_name, unsigned split_count, uint64_t split_size_mb);
+int create_vbdev_split(const char *base_bdev_name, unsigned split_count, uint64_t split_size_mb,
+		       bool share);
 
 /**
  * Remove all created split bdevs and split config.

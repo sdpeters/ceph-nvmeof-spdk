@@ -874,13 +874,14 @@ def bdev_opal_set_lock_state(client, bdev_name, user_id, password, lock_state):
 
 
 @deprecated_alias('construct_split_vbdev')
-def bdev_split_create(client, base_bdev, split_count, split_size_mb=None):
+def bdev_split_create(client, base_bdev, split_count, split_size_mb=None, share=None):
     """Create split block devices from a base bdev.
 
     Args:
         base_bdev: name of bdev to split
         split_count: number of split bdevs to create
         split_size_mb: size of each split volume in MiB (optional)
+        share: Share base n ways instead of splitting
 
     Returns:
         List of created block devices.
@@ -888,6 +889,7 @@ def bdev_split_create(client, base_bdev, split_count, split_size_mb=None):
     params = {
         'base_bdev': base_bdev,
         'split_count': split_count,
+        'share': share,
     }
     if split_size_mb:
         params['split_size_mb'] = split_size_mb
