@@ -2606,6 +2606,17 @@ bdev_nvme_admin_passthru(struct nvme_bdev *nbdev, struct spdk_io_channel *ch,
 
 	bio->orig_thread = spdk_io_channel_get_thread(ch);
 
+	/*
+	 * Unless the command explicitly targets all namespaces, target this bdev's namespace
+	 *
+	 * This bdev may be exposed over NVMe-oF with a different nsid than its nsid on the physical controller.
+	 * So overwrite the provided nsid with the correct nsid when the raw admin command is trying to target the
+	 * namespace.
+	 */
+	if (cmd->nsid != SPDK_NVME_GLOBAL_NS_TAG) {
+		cmd->nsid = spdk_nvme_ns_get_id(nbdev->nvme_ns->ns);
+	}
+
 	return spdk_nvme_ctrlr_cmd_admin_raw(nbdev->nvme_bdev_ctrlr->ctrlr, cmd, buf,
 					     (uint32_t)nbytes, bdev_nvme_admin_passthru_done, bio);
 }
