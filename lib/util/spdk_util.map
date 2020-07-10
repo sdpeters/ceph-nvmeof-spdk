@@ -76,6 +76,11 @@
 	# public functions in file.h
 	spdk_posix_file_load;
 
+	# public functions in md5.h
+	spdk_md5init;
+	spdk_md5final;
+	spdk_md5update;
+
 	# public functions in pipe.h
 	spdk_pipe_create;
 	spdk_pipe_destroy;
@@ -119,8 +124,6 @@
 	spdk_uuid_compare;
 	spdk_uuid_generate;
 	spdk_uuid_copy;
-
-
 
 
 

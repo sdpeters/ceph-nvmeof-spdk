@@ -36,9 +36,9 @@
 
 #include <openssl/md5.h>
 
-#include "iscsi/md5.h"
+#include "md5.h"
 
-int md5init(struct spdk_md5ctx *md5ctx)
+int spdk_md5init(struct spdk_md5ctx *md5ctx)
 {
 	int rc;
 
@@ -49,7 +49,7 @@ int md5init(struct spdk_md5ctx *md5ctx)
 	return rc;
 }
 
-int md5final(void *md5, struct spdk_md5ctx *md5ctx)
+int spdk_md5final(void *md5, struct spdk_md5ctx *md5ctx)
 {
 	int rc;
 
@@ -60,7 +60,7 @@ int md5final(void *md5, struct spdk_md5ctx *md5ctx)
 	return rc;
 }
 
-int md5update(struct spdk_md5ctx *md5ctx, const void *data, size_t len)
+int spdk_md5update(struct spdk_md5ctx *md5ctx, const void *data, size_t len)
 {
 	int rc;
 
