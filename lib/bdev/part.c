@@ -532,6 +532,11 @@ spdk_bdev_part_construct(struct spdk_bdev_part *part, struct spdk_bdev_part_base
 		base->claimed = true;
 	}
 
+	/* If the part includes the entire base, it's the "share" special case. Assume the UUID of the base */
+	if (spdk_bdev_part_is_entire_base(part)) {
+		spdk_uuid_copy(&part->internal.bdev.uuid, spdk_bdev_get_uuid(base->bdev));
+	}
+
 	spdk_io_device_register(part, bdev_part_channel_create_cb,
 				bdev_part_channel_destroy_cb,
 				base->channel_size,

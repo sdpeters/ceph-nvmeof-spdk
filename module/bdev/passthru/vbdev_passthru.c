@@ -694,6 +694,9 @@ vbdev_passthru_register(struct spdk_bdev *bdev)
 		pt_node->pt_bdev.module = &passthru_if;
 		TAILQ_INSERT_TAIL(&g_pt_nodes, pt_node, link);
 
+		/* Adopt same UUID as base */
+		spdk_uuid_copy(&pt_node->pt_bdev.uuid, spdk_bdev_get_uuid(pt_node->base_bdev));
+
 		spdk_io_device_register(pt_node, pt_bdev_ch_create_cb, pt_bdev_ch_destroy_cb,
 					sizeof(struct pt_io_channel),
 					name->vbdev_name);
