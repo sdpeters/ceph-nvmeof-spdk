@@ -279,6 +279,7 @@ spdk_nvmf_subsystem_create(struct spdk_nvmf_tgt *tgt,
 	subsystem->max_allowed_nsid = num_ns;
 	subsystem->next_cntlid = 0;
 	snprintf(subsystem->subnqn, sizeof(subsystem->subnqn), "%s", nqn);
+	pthread_mutex_init(&subsystem->mutex, NULL);
 	TAILQ_INIT(&subsystem->listeners);
 	TAILQ_INIT(&subsystem->hosts);
 	TAILQ_INIT(&subsystem->ctrlrs);
@@ -304,6 +305,7 @@ spdk_nvmf_subsystem_create(struct spdk_nvmf_tgt *tgt,
 	return subsystem;
 }
 
+/* Must hold subsystem->mutex while calling this function */
 static void
 nvmf_subsystem_remove_host(struct spdk_nvmf_subsystem *subsystem, struct spdk_nvmf_host *host)
 {
@@ -346,9 +348,13 @@ spdk_nvmf_subsystem_destroy(struct spdk_nvmf_subsystem *subsystem)
 
 	nvmf_subsystem_remove_all_listeners(subsystem, false);
 
+	pthread_mutex_lock(&subsystem->mutex);
+
 	TAILQ_FOREACH_SAFE(host, &subsystem->hosts, link, host_tmp) {
 		nvmf_subsystem_remove_host(subsystem, host);
 	}
+
+	pthread_mutex_unlock(&subsystem->mutex);
 
 	TAILQ_FOREACH_SAFE(ctrlr, &subsystem->ctrlrs, link, ctrlr_tmp) {
 		nvmf_ctrlr_destruct(ctrlr);
@@ -366,6 +372,8 @@ spdk_nvmf_subsystem_destroy(struct spdk_nvmf_subsystem *subsystem)
 
 	subsystem->tgt->subsystems[subsystem->id] = NULL;
 	subsystem->tgt->discovery_genctr++;
+
+	pthread_mutex_destroy(&subsystem->mutex);
 
 	free(subsystem);
 }
@@ -613,6 +621,21 @@ spdk_nvmf_subsystem_get_next(struct spdk_nvmf_subsystem *subsystem)
 	return NULL;
 }
 
+/* Must hold subsystem->mutex while calling this function */
+static struct spdk_nvmf_host *
+nvmf_subsystem_find_host(struct spdk_nvmf_subsystem *subsystem, const char *hostnqn)
+{
+	struct spdk_nvmf_host *host = NULL;
+
+	TAILQ_FOREACH(host, &subsystem->hosts, link) {
+		if (strcmp(hostnqn, host->nqn) == 0) {
+			return host;
+		}
+	}
+
+	return NULL;
+}
+
 struct spdk_nvmf_host * 
 spdk_nvmf_ns_find_host(struct spdk_nvmf_ns *ns, const char *hostnqn)
 {
@@ -750,21 +773,6 @@ spdk_nvmf_ns_detach_ctrlr(struct spdk_nvmf_subsystem *subsystem, uint32_t nsid, 
 	return 0;
 }
 
-/* Must hold subsystem->mutex while calling this function */
-static struct spdk_nvmf_host *
-nvmf_subsystem_find_host(struct spdk_nvmf_subsystem *subsystem, const char *hostnqn)
-{
-	struct spdk_nvmf_host *host = NULL;
-
-	TAILQ_FOREACH(host, &subsystem->hosts, link) {
-		if (strcmp(hostnqn, host->nqn) == 0) {
-			return host;
-		}
-	}
-
-	return NULL;
-}
-
 int
 spdk_nvmf_subsystem_add_host(struct spdk_nvmf_subsystem *subsystem, const char *hostnqn)
 {
@@ -774,25 +782,27 @@ spdk_nvmf_subsystem_add_host(struct spdk_nvmf_subsystem *subsystem, const char *
 		return -EINVAL;
 	}
 
-	if (!(subsystem->state == SPDK_NVMF_SUBSYSTEM_INACTIVE ||
-	      subsystem->state == SPDK_NVMF_SUBSYSTEM_PAUSED)) {
-		return -EAGAIN;
-	}
+	pthread_mutex_lock(&subsystem->mutex);
 
 	if (nvmf_subsystem_find_host(subsystem, hostnqn)) {
 		/* This subsystem already allows the specified host. */
+		pthread_mutex_unlock(&subsystem->mutex);
 		return 0;
 	}
 
 	host = calloc(1, sizeof(*host));
 	if (!host) {
+		pthread_mutex_unlock(&subsystem->mutex);
 		return -ENOMEM;
 	}
 
 	snprintf(host->nqn, sizeof(host->nqn), "%s", hostnqn);
 
 	TAILQ_INSERT_HEAD(&subsystem->hosts, host, link);
+
 	subsystem->tgt->discovery_genctr++;
+
+	pthread_mutex_unlock(&subsystem->mutex);
 
 	return 0;
 }
@@ -802,17 +812,17 @@ spdk_nvmf_subsystem_remove_host(struct spdk_nvmf_subsystem *subsystem, const cha
 {
 	struct spdk_nvmf_host *host;
 
-	if (!(subsystem->state == SPDK_NVMF_SUBSYSTEM_INACTIVE ||
-	      subsystem->state == SPDK_NVMF_SUBSYSTEM_PAUSED)) {
-		return -EAGAIN;
-	}
+	pthread_mutex_lock(&subsystem->mutex);
 
 	host = nvmf_subsystem_find_host(subsystem, hostnqn);
 	if (host == NULL) {
+		pthread_mutex_unlock(&subsystem->mutex);
 		return -ENOENT;
 	}
 
 	nvmf_subsystem_remove_host(subsystem, host);
+	pthread_mutex_unlock(&subsystem->mutex);
+
 	return 0;
 }
 
@@ -838,6 +848,8 @@ spdk_nvmf_subsystem_get_allow_any_host(const struct spdk_nvmf_subsystem *subsyst
 bool
 spdk_nvmf_subsystem_host_allowed(struct spdk_nvmf_subsystem *subsystem, const char *hostnqn)
 {
+	bool allowed;
+
 	if (!hostnqn) {
 		return false;
 	}
@@ -846,7 +858,11 @@ spdk_nvmf_subsystem_host_allowed(struct spdk_nvmf_subsystem *subsystem, const ch
 		return true;
 	}
 
-	return nvmf_subsystem_find_host(subsystem, hostnqn) != NULL;
+	pthread_mutex_lock(&subsystem->mutex);
+	allowed =  nvmf_subsystem_find_host(subsystem, hostnqn) != NULL;
+	pthread_mutex_unlock(&subsystem->mutex);
+
+	return allowed;
 }
 
 struct spdk_nvmf_host *
