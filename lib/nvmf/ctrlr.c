@@ -313,8 +313,7 @@ nvmf_ctrlr_create(struct spdk_nvmf_subsystem *subsystem,
 	ctrlr->qpair_mask = spdk_bit_array_create(transport->opts.max_qpairs_per_ctrlr);
 	if (!ctrlr->qpair_mask) {
 		SPDK_ERRLOG("Failed to allocate controller qpair mask\n");
-		free(ctrlr);
-		return NULL;
+		goto err_qpair_mask;
 	}
 
 	nvmf_ctrlr_cdata_init(transport, subsystem, &ctrlr->cdata);
@@ -394,6 +393,10 @@ nvmf_ctrlr_create(struct spdk_nvmf_subsystem *subsystem,
 	spdk_thread_send_msg(subsystem->thread, _nvmf_subsystem_add_ctrlr, req);
 
 	return ctrlr;
+
+err_qpair_mask:
+	free(ctrlr);
+	return NULL;
 }
 
 static void
