@@ -3035,13 +3035,20 @@ _nvmf_request_exec(struct spdk_nvmf_request *req,
 		spdk_nvme_print_command(qpair->qid, &req->cmd->nvme_cmd);
 	}
 
+	/* Place the request on the outstanding list so we can keep track of it */
+	TAILQ_INSERT_TAIL(&qpair->outstanding, req, link);
+
 	/* check if namespace is attached if commands uses NSID */
 	if (req->cmd->nvmf_cmd.opcode != SPDK_NVME_OPC_FABRIC && qpair->ctrlr) {
 		nsid = req->cmd->nvme_cmd.nsid;
 		if (nsid != 0 && nsid != SPDK_NVME_GLOBAL_NS_TAG && !nvmf_ctrlr_ns_is_active(qpair->ctrlr, nsid)) {
-			/* Namespace not attached */
-			req->rsp->nvme_cpl.status.sct = SPDK_NVME_SCT_COMMAND_SPECIFIC;
-			req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_NAMESPACE_NOT_ATTACHED;
+			/* Namespace not attached 
+			 * 6.1.5 Unless otherwise noted, specifying an inactive NSID in a command that
+			 * uses the Namespace Identifier (NSID) field shall cause the controller to 
+			 * abort the command with status Invalid Field in Command.
+			 */
+			req->rsp->nvme_cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+			req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_INVALID_FIELD;
 			_nvmf_request_complete(req);
 			return;
 		}
