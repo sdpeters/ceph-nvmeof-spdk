@@ -628,7 +628,7 @@ spdk_nvmf_ns_find_host(struct spdk_nvmf_ns *ns, const char *hostnqn)
 }
 
 int
-spdk_nvmf_ns_attach(struct spdk_nvmf_subsystem *subsystem, uint32_t nsid, const char *hostnqn)
+spdk_nvmf_ns_attach_ctrlr(struct spdk_nvmf_subsystem *subsystem, uint32_t nsid, const char *hostnqn)
 {
 	struct spdk_nvmf_host *host;
 	struct spdk_nvmf_ns *ns;
@@ -676,8 +676,7 @@ spdk_nvmf_ns_attach(struct spdk_nvmf_subsystem *subsystem, uint32_t nsid, const 
 		ctrlr->active_ns[nsid - 1] = true; 
 	}
 
-	// TODO: check
-	nvmf_update_discovery_log(subsystem->tgt, hostnqn);
+	nvmf_ctrlr_async_event_ns_notice(ctrlr);
 
 	pthread_mutex_unlock(&subsystem->mutex);
 
@@ -685,7 +684,7 @@ spdk_nvmf_ns_attach(struct spdk_nvmf_subsystem *subsystem, uint32_t nsid, const 
 }
 
 int
-spdk_nvmf_ns_detach(struct spdk_nvmf_subsystem *subsystem, uint32_t nsid, const char *hostnqn)
+spdk_nvmf_ns_detach_ctrlr(struct spdk_nvmf_subsystem *subsystem, uint32_t nsid, const char *hostnqn)
 {
 	struct spdk_nvmf_host *host;
 	struct spdk_nvmf_ns *ns;
@@ -726,8 +725,7 @@ spdk_nvmf_ns_detach(struct spdk_nvmf_subsystem *subsystem, uint32_t nsid, const 
 		ctrlr->active_ns[nsid - 1] = false; 
 	}
 
-	//TODO: check
-	nvmf_update_discovery_log(subsystem->tgt, hostnqn);
+	nvmf_ctrlr_async_event_ns_notice(ctrlr);
 
 	pthread_mutex_unlock(&subsystem->mutex);
 
