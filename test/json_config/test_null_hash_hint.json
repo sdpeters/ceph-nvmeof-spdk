@@ -1,0 +1,22 @@
+{
+  "label": {
+    "name": "null-hash-hint"
+  },
+  "ln_nguid": "c119038a-54ab-463a-aa86-f0fc3db84b49",
+  "ns_bytes": 67108864,
+  "object_bytes": 4194304,
+  "object_name_format": "",
+  "hash_fn": "null",
+  "nqn_table": [
+    "nqn.2019-11-14.com.intel.nemo:node1",
+    "nqn.2019-11-14.com.intel.nemo:node2",
+    "nqn.2019-11-14.com.intel.nemo:node3",
+    "nqn.2019-11-14.com.intel.nemo:node4"
+  ],
+  "hash_table": [
+    0,
+    1,
+    2,
+    3
+  ]
+}

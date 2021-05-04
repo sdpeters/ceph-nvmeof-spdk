@@ -157,6 +157,12 @@ DEFINE_STUB(nvmf_bdev_ctrlr_dsm_cmd,
 	     struct spdk_nvmf_request *req),
 	    0);
 
+DEFINE_STUB(spdk_nvmf_bdev_ctrlr_nvme_passthru_admin,
+	    int,
+	    (struct spdk_bdev *bdev, struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
+	     struct spdk_nvmf_request *req, spdk_nvmf_nvme_passthru_cmd_cb cb_fn),
+	    0);
+
 DEFINE_STUB(nvmf_bdev_ctrlr_nvme_passthru_io,
 	    int,
 	    (struct spdk_bdev *bdev, struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
@@ -218,6 +224,12 @@ struct spdk_bdev {
 	int ut_mock;
 	uint64_t blockcnt;
 };
+
+bool
+spdk_bdev_io_type_supported(struct spdk_bdev *bdev, enum spdk_bdev_io_type io_type)
+{
+	return false;
+}
 
 int
 spdk_nvme_transport_id_compare(const struct spdk_nvme_transport_id *trid1,

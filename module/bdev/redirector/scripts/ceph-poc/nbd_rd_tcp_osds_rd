@@ -1,0 +1,39 @@
+#!/bin/bash
+# NBD to bdev redirector to n* NVMF initiator bdev each connected to tgt_tcp_u_img_0 in an OSD node
+#
+#set -x
+
+modprobe -n nbd
+sock_name=/var/tmp/nbd_rd_tcp_osds_rd.sock
+target_port=4420
+nbd_dev=/dev/nbd0
+hash_hint_dir=path-to-your-hint-files
+hash_hint_file=${hash_hint_dir}/hint-u-img-0.json
+
+domain=yourlab.yourcompany.com
+# Our OSD nodes are all named nemo-osd-<number>, where <number> is one of these
+# and is also the last byte of its IP address
+osd_nodes="201 202 203 204 205 206 207 208"
+sudo test/app/bdev_svc/bdev_svc --rpc-socket=${sock_name} --shm-id 0 --cpumask 0x08 &
+
+# Construct redirector with all nvmf bdevs as default targets
+sudo scripts/rpc.py -s ${sock_name} construct_redirector_bdev -d "nvmf_bdev_201n1 nvmf_bdev_202n1 nvmf_bdev_203n1 nvmf_bdev_204n1 nvmf_bdev_205n1 nvmf_bdev_206n1 nvmf_bdev_207n1 nvmf_bdev_208n1" -n rd0
+
+for osd_node in ${osd_nodes}; do
+  target_name=nemo-osd-${osd_node}
+  target_fqdn=${target_name}.${domain}
+  # replace with your IP subnet
+  target_ip=190.15.11.${osd_node}
+  target_nqn=nqn.2019-11.com.intel.nemo:${target_name}
+  # NVMe (-oF) bdevs for rd1 & 2 targeting the above namespace
+  sudo scripts/rpc.py -s ${sock_name} bdev_nvme_attach_controller -t TCP -b nvmf_bdev_${osd_node} -a ${target_ip} -f ipv4 -s ${target_port} -n ${target_nqn}
+done
+
+redirector_bdev=$(sudo scripts/rpc.py -s ${sock_name} bdev_get_bdevs | jq -r 'first(.[] | select(.product_name == "redirector" and .claimed == false) | .name)')
+if [ -z $redirector_bdev ]; then
+    echo "No rd0 device in SPDK app"
+    exit 1
+fi
+
+sudo scripts/rpc.py -s ${sock_name} redirector_add_hash_hint --redirector rd0 --hash_hint_file ${hash_hint_file}
+sudo scripts/rpc.py -s ${sock_name} nbd_start_disk rd0 ${nbd_dev}

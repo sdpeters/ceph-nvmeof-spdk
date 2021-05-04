@@ -1694,6 +1694,9 @@ nvmf_ctrlr_get_log_page(struct spdk_nvmf_request *req)
 	struct spdk_nvmf_subsystem *subsystem = ctrlr->subsys;
 	struct spdk_nvme_cmd *cmd = &req->cmd->nvme_cmd;
 	struct spdk_nvme_cpl *response = &req->rsp->nvme_cpl;
+	struct spdk_nvmf_ns *ns;
+	struct spdk_nvmf_subsystem_pg_ns_info *ns_info;
+	struct spdk_nvmf_poll_group *group = req->qpair->group;
 	uint64_t offset, len;
 	uint32_t numdl, numdu;
 	uint8_t lid;
@@ -1756,6 +1759,21 @@ nvmf_ctrlr_get_log_page(struct spdk_nvmf_request *req)
 			nvmf_get_reservation_notification_log_page(ctrlr, req->data, offset, len);
 			return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
 		default:
+			if (spdk_nvme_log_page_is_vendor_specific(lid)) {
+				ns = _nvmf_subsystem_get_ns(ctrlr->subsys, cmd->nsid);
+				if (ns == NULL || ns->bdev == NULL) {
+					SPDK_ERRLOG("Unsuccessful query for nsid %u\n", cmd->nsid);
+					goto invalid_log_page;
+				}
+				if (!spdk_bdev_io_type_supported(ns->bdev, SPDK_BDEV_IO_TYPE_NVME_ADMIN)) {
+					/* Treat !passthru as invalid log page, not invalid command */
+					goto invalid_log_page;
+				}
+				/* Pass through to the namespace */
+				ns_info = &group->sgroups[ctrlr->subsys->id].ns_info[cmd->nsid - 1];
+				return spdk_nvmf_bdev_ctrlr_nvme_passthru_admin(ns->bdev, ns->desc,
+						ns_info->channel, req, NULL);
+			}
 			goto invalid_log_page;
 		}
 	}

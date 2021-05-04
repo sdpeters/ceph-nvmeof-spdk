@@ -1,0 +1,36 @@
+#!/bin/bash
+# NVMF target with RBD image u_img_0 as its only namespace
+#
+set -x
+
+sock_name=/var/tmp/tgt_tcp_u_img_0.sock
+target_port=4420
+
+# Image properties from u-img-0 hint [replace with yours]
+ns_bytes=10737418240
+object_bytes=4194304
+ln_nguid="986956f4-cf13-4ccc-a9fb-6f398641ff24"
+
+hostname=`hostname`
+nvmf_ip=`ip addr show | grep 190.15.11 | awk '{print $2}' | sed 's/\/.*//g'`
+nqn=nqn.2019-11.com.intel.nemo:${hostname}
+
+#
+# OSD node specific (where is u_img_0 attached via the kernel rbd driver?)
+#
+rbd_dev=/dev/rbd0
+rd_io_boundary=${object_bytes}
+rd_size_bytes=${ns_bytes}
+rd_size_mb=$( expr $rd_size_bytes / 1024 / 1024 )
+rd_block_size=512
+rd_block_count=$( expr $rd_size_bytes / $rd_block_size )
+sudo app/nvmf_tgt/nvmf_tgt --rpc-socket=${sock_name} --shm-id 0 --cpumask 0x08 &
+sleep 3
+sudo scripts/rpc.py -s ${sock_name} construct_aio_bdev ${rbd_dev} rbd_bdev ${rd_block_size}
+sudo scripts/rpc.py -s ${sock_name} construct_redirector_bdev -d rbd_bdev -n rd_rbd --uuid ${ln_nguid} --nqn ${nqn} --blockcnt ${rd_block_count} --blocklen ${rd_block_size}
+#
+sudo scripts/rpc.py -s ${sock_name} nvmf_create_transport -t TCP
+sudo scripts/rpc.py -s ${sock_name} nvmf_subsystem_create ${nqn} -a -m 8 -s SPDK001
+sudo scripts/rpc.py -s ${sock_name} nvmf_subsystem_add_ns ${nqn} rd_rbd
+sudo scripts/rpc.py -s ${sock_name} nvmf_subsystem_add_listener ${nqn} -t TCP -f ipv4 -s ${target_port} -a ${nvmf_ip}
+sudo /root/prometheus/spdk_thread_file_collector.sh

@@ -42,6 +42,7 @@ def get_bdev_delete_method(bdev):
                          'bdev_crypto_create': "bdev_crypto_delete",
                          'bdev_delay_create': "bdev_delay_delete",
                          'bdev_passthru_create': "bdev_passthru_delete",
+                         'construct_redirector_bdev': "delete_redirector_bdev",
                          'bdev_compress_create': 'bdev_compress_delete',
                          }
     destroy_method = None
@@ -56,9 +57,11 @@ def get_bdev_delete_method(bdev):
 def clear_bdev_subsystem(args, bdev_config):
     rpc_bdevs = args.client.call("bdev_get_bdevs")
     for bdev in bdev_config:
+        print("Considering %s" % get_bdev_name(bdev))
         bdev_name_key = get_bdev_name_key(bdev)
         bdev_name = get_bdev_name(bdev)
         destroy_method = get_bdev_delete_method(bdev)
+        print("Destroying %s with %s(%s:%s)" % (bdev_name, destroy_method, bdev_name_key, bdev_name))
         if destroy_method:
             args.client.call(destroy_method, {bdev_name_key: bdev_name})
 

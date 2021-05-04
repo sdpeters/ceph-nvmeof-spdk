@@ -194,6 +194,8 @@ run_test "unittest_notify" $valgrind $testdir/lib/notify/notify.c/notify_ut
 run_test "unittest_nvme" unittest_nvme
 run_test "unittest_log" $valgrind $testdir/lib/log/log.c/log_ut
 run_test "unittest_lvol" $valgrind $testdir/lib/lvol/lvol.c/lvol_ut
+run_test "unittest_lvol" $valgrind $testdir/lib/bdev/vbdev_redirector.c/vbdev_redirector_ut
+run_test "unittest_lvol" $valgrind $testdir/lib/bdev/vbdev_redirector.c/vbdev_redirector_ut --block_len=4096 --strip_size=128 --max_io_size=256 --max_qd=64 --max_base_drives=8 --max_redirectors=3
 if grep -q '#define SPDK_CONFIG_RDMA 1' $rootdir/include/spdk/config.h; then
 	run_test "unittest_nvme_rdma" $valgrind $testdir/lib/nvme/nvme_rdma.c/nvme_rdma_ut
 fi

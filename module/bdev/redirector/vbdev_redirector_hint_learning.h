@@ -1,7 +1,6 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (C) 2008-2012 Daisuke Aoyama <aoyama@peach.ne.jp>.
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
  *
@@ -32,21 +31,15 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef SPDK_MD5_H
-#define SPDK_MD5_H
+#ifndef SPDK_VBDEV_REDIRECTOR_HINT_LEARNING_H
+#define SPDK_VBDEV_REDIRECTOR_HINT_LEARNING_H
 
-#include "spdk/stdinc.h"
+#include "spdk/likely.h"
+#include "vbdev_redirector_types.h"
+#include "vbdev_redirector_internal.h"
 
-#include <openssl/md5.h>
+int vbdev_redirector_get_hints(struct redirector_bdev *rd_node, size_t target_bdev_index);
 
-#define SPDK_MD5DIGEST_LEN MD5_DIGEST_LENGTH
+int vbdev_redirector_hint_poll(void *ctx);
 
-struct spdk_md5ctx {
-	MD5_CTX md5ctx;
-};
-
-int md5init(struct spdk_md5ctx *md5ctx);
-int md5final(void *md5, struct spdk_md5ctx *md5ctx);
-int md5update(struct spdk_md5ctx *md5ctx, const void *data, size_t len);
-
-#endif /* SPDK_MD5_H */
+#endif /* SPDK_VBDEV_REDIRECTOR_HINT_LEARNING_H */

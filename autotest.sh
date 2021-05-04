@@ -179,6 +179,8 @@ if [ $SPDK_RUN_FUNCTIONAL_TEST -eq 1 ]; then
 		fi
 	fi
 
+	run_test "bdev_redirector" test/bdev/bdev_redirector.sh
+
 	if [ $SPDK_TEST_JSON -eq 1 ]; then
 		run_test "test_converter" test/config_converter/test_converter.sh
 	fi

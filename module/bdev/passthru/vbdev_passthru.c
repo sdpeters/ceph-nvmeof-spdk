@@ -358,6 +358,14 @@ vbdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *b
 		rc = spdk_bdev_abort(pt_node->base_desc, pt_ch->base_ch, bdev_io->u.abort.bio_to_abort,
 				     _pt_complete_io, bdev_io);
 		break;
+	case SPDK_BDEV_IO_TYPE_NVME_ADMIN:
+		rc = spdk_bdev_nvme_admin_passthru(pt_node->base_desc, pt_ch->base_ch,
+						   &bdev_io->u.nvme_passthru.cmd,
+						   bdev_io->u.nvme_passthru.buf,
+						   bdev_io->u.nvme_passthru.nbytes,
+						   _pt_complete_io, bdev_io);
+
+		break;
 	default:
 		SPDK_ERRLOG("passthru: unknown I/O type %d\n", bdev_io->type);
 		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED);
@@ -685,6 +693,9 @@ vbdev_passthru_register(struct spdk_bdev *bdev)
 		pt_node->pt_bdev.fn_table = &vbdev_passthru_fn_table;
 		pt_node->pt_bdev.module = &passthru_if;
 		TAILQ_INSERT_TAIL(&g_pt_nodes, pt_node, link);
+
+		/* Adopt same UUID as base */
+		spdk_uuid_copy(&pt_node->pt_bdev.uuid, spdk_bdev_get_uuid(pt_node->base_bdev));
 
 		spdk_io_device_register(pt_node, pt_bdev_ch_create_cb, pt_bdev_ch_destroy_cb,
 					sizeof(struct pt_io_channel),

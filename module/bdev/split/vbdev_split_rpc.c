@@ -42,12 +42,14 @@ struct rpc_construct_split {
 	char *base_bdev;
 	uint32_t split_count;
 	uint64_t split_size_mb;
+	bool share;
 };
 
 static const struct spdk_json_object_decoder rpc_construct_split_decoders[] = {
 	{"base_bdev", offsetof(struct rpc_construct_split, base_bdev), spdk_json_decode_string},
 	{"split_count", offsetof(struct rpc_construct_split, split_count), spdk_json_decode_uint32},
 	{"split_size_mb", offsetof(struct rpc_construct_split, split_size_mb), spdk_json_decode_uint64, true},
+	{"share", offsetof(struct rpc_construct_split, share), spdk_json_decode_bool, true},
 };
 
 static void
@@ -67,7 +69,7 @@ rpc_bdev_split_create(struct spdk_jsonrpc_request *request,
 		goto out;
 	}
 
-	rc = create_vbdev_split(req.base_bdev, req.split_count, req.split_size_mb);
+	rc = create_vbdev_split(req.base_bdev, req.split_count, req.split_size_mb, req.share);
 	if (rc < 0) {
 		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
 						     "Failed to create %"PRIu32" split bdevs from '%s': %s",

@@ -1,0 +1,585 @@
+Adaptive Distributed NVMe-oF Namespaces (ADNN)
+
+ADNN adapts NVMe-oF to distributed block storage systems. When a volume is
+scattered over several storage nodes, point to point protocols like NVMe-oF
+can't get host IO directly to every LBA of that volume. These systems typically
+use custom block layer clients in the hosts, or route IO to a gateway that
+forwards it to the right storage node. ADNN extends NVMe-oF by exposing these
+volumes from NVMe-oF targets in all the storage nodes, and enabling hosts to
+learn which volume extents are located on which targets.
+
+This SPDK bdev is the reference implementation of the ADNN redirector, the basic
+building block for ADNN systems.
+
+1	Objectives of ADNN
+
+NVMe-oF enables one or more hosts to access an NVMe device remotely with high
+performance and low overhead. This works well for volumes backed by storage in a
+single node.
+
+A distributed storage system provisions volumes fluidly from a pool of physical
+storage devices across a set of nodes on a fabric. It may construct a volume
+from smaller regions on several nodes if no single node had enough space
+free. It may intentionally spread the volume across many nodes to distribute the
+IO load across several servers or devices.
+
+ADNN enables hosts to access these volumes with NVMe-oF. Without ADNN hosts
+would require bespoke block layer software for the distributed storage system,
+or the storage system would provide an NVMe-oF gateway to forward NVMe-oF IO to
+its individual storage nodes. ADNN eliminates the bespoke client software and
+the extra fabric hop required by the gateway.
+
+ADNN is an NVMe-oF extension. ADNN functionality is negotiated between NVMe-oF
+hosts and subsystems using (currently vendor specific) log pages. ADNN hosts and
+subsystems remain compatible with NVMe-oF peers that don't support ADNN.
+
+2	How ADNN systems work
+
+An ADNN system consists of some ADNN hosts and a distributed volume manager
+(DVM) that provides the storage for ADNN hosts. A DVM provides an ADNN target in
+each of its nodes. A host tries to connect to all of these, and can immediately
+begin delivering IO for its logical namespace to any of these targets that
+provide it.
+
+The targets in the DVM send location hints to the hosts (on connect, and
+whenever something changes).  Location hints specify a DVM target (by NQN) and
+an LBA range. Hosts use these hints to build (and update) internal LBA to target
+maps, and deliver each IO to the target indicated in the map.
+
+A DVM is any distributed storage system that provides ADNN support to connected
+hosts. A DVM could be as small as a single node, but the smallest DVM that
+benefits from ADNN is probably a 2-socket server with a NIC and some SSDs in
+both NUMA nodes. ADNN can be used to access Ceph RBD images, in which case Ceph
+becomes a DVM (with the addition of some daemons in the OSD nodes).
+
+The basic strategy of ADNN is to minimize what hosts need to know, and how
+promptly they need to apply it. The internal components of a DVM need to be
+tightly coupled for it to function, but the ADNN hosts outside the DVM do not.
+
+Ideally, DVMs use a discovery service to reveal what NVMe-oF subsystems they
+need to connect to, and from these they discover the namespaces they can
+access. Hosts use the ADNN mechanisms to determine which of the namespaces they
+can see are normal NVMe-oF namespaces and which are ADNN logical namespaces
+(LN). ADNN Logical namespaces appear in more than one subsystem, and provide the
+host with location hints that enable it to send each IO for that namespace to
+the storage node containing it.
+
+All the ADNN targets inside a DVM must accept and complete any IO to any of the
+DVMs logical namespaces. If the IO addresses an LBA on another DVM node, the DVM
+must deliver that IO to that DVM node somehow (an internal NVMe-oF connection,
+custom hardware interconnect, etc.). It's expected that any existing distributed
+storage system a DVM interface is added to must already have such a mechanism.
+
+The basic strategy of the DVM is to be able to forward IO internally from any of
+its targets to whatever node contains that extent of the logical namespace, then
+supply its connected hosts with location hints so the hosts deliver their IO
+directly to the correct target.
+
+An actual production DVM should use LUN masking on the ADNN targets so each
+connected host sees only its assigned logical namespaces. A DVM should provide a
+discovery service listing all its ADNN targets.
+
+3	ADNN redirector
+
+The redirector (this bdev) is the basic building block of an ADNN system. Hosts
+and targets both contain redirectors. This bdev can be used in both places.
+
+3.1	Host redirectors
+
+A host redirector accepts IO from an application and delivers it to its set of
+targets. A host redirector is configured with a set of default targets. These
+should be targets provided by a DVM, that all provide one ADNN logical namespace
+(that they reveal to this host). With this minimal configuration the redirector
+bdev will inherit its namespace NGUID and other parameters from its targets (the
+first one it connects to). These can also be specified when the redirector is
+created.
+
+Host redirectors learn location hints from their targets. They apply the most
+recent hints they have that refer to targets they can reach. Hints for smaller
+LBA regions match before hints for larger ones, so a small hint can provide an
+exception for a larger placement rule. Targets can be added or removed from
+hosts (ideally via a DS, but for now via JSON RPC), and hints can be updated by
+targets. Host redirectors update their LBA to target map whenever this happens.
+
+Host redirectors don't fail IO (that might have failed because of a fabric or
+single target failure) until they've tried all the possible destinations for it.
+
+A host redirector doesn't start and accept IO until it has at least one working
+default target. If all a host redirector's targets fail, the host redirector
+fails (so the application's block device fails). Storage architects can choose a
+different behavior, but the default is intended for cases where the host
+discovered everything from the DS and DVM targets, and doesn't have a management
+interface or any control path from the DVM to tell it when it should or should
+not give up on the LN.
+
+3.2	Egress redirectors
+
+The redirectors in ADNN targets are called egress redirectors, because they're
+the last ADNN redirector in the path to the underlying storage (and the last
+point at which an extent in an ADNN LN could be moved or redirected). Egress
+redirectors deliver IO for part of the LN to the underlying storage. For simple
+DVMs this may take the form of an "authoritative" location hint that maps an LBA
+region in the LN to a different LBA region in another bdev (e.g. an SSD).
+
+Authoritative hints are added or removed from a redirector via JSON RPC. A hint
+is only authoritative within the redirector it's configured on. The redirector
+will send that hint to all its targets, but they won't consider it
+authoritative. Authoritative hints are never discarded, and never replaced or
+overridden by learned hints. An egress redirector always applies its auth hints,
+and always sends them to its connected hosts.
+
+A redirector with an authoritative hint starts and accepts IO immediately. IO it
+can't deliver is queued until it can be delivered (when a target for it becomes
+available, or the DVM updates the auth hints to specify a target that is
+available) or the DVM declares the namespace failed (and stops the egress
+redirector). A DVM must configure its egress redirectors with destinations for
+all LBAs (e.g. by assigning it a working default target). When something fails
+or changes, the DVM must adjust the configuration of all its egress redirectors
+so they can all deliver IO to all LBAs.
+
+4	Constructing ADNN systems
+
+The small ADNN systems constructed in the system tests here may help clarify how
+the pieces of an ADNN system fit together. See nvmf_redirector_function_test()
+in test/bdev/bdev_redirector.sh.
+
+In a nutshell, this starts two SPDK app processes. One will contain the host
+redirector (named rd0), and the other will contain both egress redirectors (rd1
+and rd2). Redirector rd1 will connect to rd1 & rd2 via NVMe-TCP. The two egress
+redirectors use the bdev interface to simplify debugging. In a real system these
+would be separate processes on separate hosts, and there wouldn't be any
+passthru or split bdevs in the path.
+
+Each egress redirector has a small bdev attached containing one half of the ADNN
+namespace. The test uses the SPDK NBD server to expose the ADNN namespace from
+host redirector rd0 as a Linux block device on the test machine. The test then
+runs fio on that block device, and makes various changes to the SPDK app
+containing rd1 and rd2 to simulate the failure of the connections to them from
+rd0.
+
+All these redirectors expose a single namespace
+(94cc7162-2267-47b8-b099-9f6a469939d2).
+
+The steps for constructing the egress redirector process for this toy system
+would look something like this:
+
+1.	rpc.py -s <egress> nvmf_create_transport -t TCP
+2.	rpc.py -s <egress> nvmf_subsystem_create nqn.2018-09.io.spdk:subsys_1 -a
+    -m 8 -s SPDK001
+3.	rpc.py -s <egress> nvmf_subsystem_add_listener nqn.2018-09.io.spdk:subsys_1
+    -t TCP -f ipv4 -s 4420 -a 127.0.0.1
+4.	rpc.py -s <egress> nvmf_subsystem_create nqn.2018-09.io.spdk:subsys_2 -a -m 8
+    -s SPDK002
+5.	rpc.py -s <egress> nvmf_subsystem_add_listener nqn.2018-09.io.spdk:subsys_2
+    -t TCP -f ipv4 -s 4421 -a 127.0.0.1
+6.	rm -rf /tmp/extent_1
+7.	dd if=/dev/zero of=/tmp/extent_1 bs=512 count=65536
+8.	rpc.py -s <egress> construct_aio_bdev /tmp/extent_1 bare_0_0 512
+9.	rpc.py -s <egress> construct_malloc_bdev 32 512 --name bare_1_0
+10.	rpc.py -s <egress> construct_redirector_bdev -d '"rd2p0"' -n rd1
+    --uuid 94cc7162-2267-47b8-b099-9f6a469939d2 --nqn nqn.2018-09.io.spdk:subsys_1
+    --blockcnt 131072 --blocklen 512 --optimal_io_boundary 65536
+11.	rpc.py -s <egress> construct_split_vbdev rd1 2 -r
+12.	rpc.py -s <egress> construct_redirector_bdev -d '"rd1p0"' -n rd2
+    --nqn nqn.2018-09.io.spdk:subsys_2 --blockcnt 131072 --blocklen 512
+    --optimal_io_boundary 65536
+13.	rpc.py -s <egress> construct_split_vbdev rd2 2 -r
+14.	rpc.py -s <egress> redirector_add_hint --redirector rd1 --target bare_0_0
+    --start_lba 0 --blocks 65536 --authoritative -persist
+15.	rpc.py -s <egress> redirector_add_hint --redirector rd2 --target rd1p0
+    --start_lba 0 --blocks 65536 --authoritative -persist
+16.	rpc.py -s <egress> redirector_add_hint --redirector rd2 --target bare_1_0
+    --start_lba 65536 --blocks 65536 --target_start_lba 0 --authoritative -persist
+17.	rpc.py -s <egress> redirector_add_hint --redirector rd1
+    --target nqn.2018-09.io.spdk:subsys_2 --start_lba 65536 --blocks 65536 -persist
+18.	rpc.py -s <egress> redirector_add_target --redirector rd1 --target bare_0_0
+    --required -persist
+19.	rpc.py -s <egress> redirector_add_target --redirector rd2 --target bare_1_0
+    --required -persist
+20.	rpc.py -s <egress> nvmf_subsystem_add_ns nqn.2018-09.io.spdk:subsys_1 rd1p1
+21.	rpc.py -s <egress> nvmf_subsystem_add_ns nqn.2018-09.io.spdk:subsys_2 rd2p1
+
+The host redirector process that would be something like:
+
+1.	rpc.py -s <host> construct_redirector_bdev -d '"PTrd1p1' 'PTrd2p1"' -n rd0
+2.	rpc.py -s <host> construct_passthru_bdev -b rd1p1n1 -p PTrd1p1
+3.	rpc.py -s <host> construct_passthru_bdev -b rd2p1n1 -p PTrd2p1
+4.	rpc.py -s <host> redirector_add_hint --redirector rd0
+    --target nqn.2018-09.io.spdk:subsys_1 --start_lba 0 --blocks 65536 -persist
+5.	rpc.py -s <host> redirector_add_hint --redirector rd0
+    --target nqn.2018-09.io.spdk:subsys_2 --start_lba 65536 --blocks 65536 -persist
+6.	rpc.py -s <host> construct_nvme_bdev -t TCP -b rd1p1 -a 127.0.0.1 -f ipv4
+    -s 4420 -n nqn.2018-09.io.spdk:subsys_1
+7.	rpc.py -s <host> construct_nvme_bdev -t TCP -b rd2p1 -a 127.0.0.1 -f ipv4
+    -s 4421 -n nqn.2018-09.io.spdk:subsys_2
+
+IO can be submitted to this toy DVM like:
+
+1.	rpc.py -s <host> start_nbd_disk rd0 /dev/nbd0
+2.	dd if=/dev/nbd0 of=/tmp/nbdtest bs=4096 count=1 iflag=direct
+
+Note that the namespace ID of the redirector bdev currently configured as its
+UUID. ADNN namespaces are actually identified by their NGUID. Use of the UUID is
+an artifact of the redirector's implementation as a bdev, and will change.
+
+Also note that the ADNN namespace ID is only specified in the construction of
+rd1. This script is careful to make rd1 the first redirector to start. The
+others inherit their namespace ID from the first redirector they connect to. The
+Namespace ID should always be specified in egress redirectors, but the idea is
+that a host redirector may get away without having its namespace NGUID
+configured if the egress redirectors only expose the namespaces the host is
+allowed to use. This gets us closer to stateless host redirector configuration.
+
+5	Ceph as an ADNN DVM
+
+Scripts are provided here (see ./scripts/README) for the POC of Ceph as a
+DVM. Hopefully this enables interested parties to see the data path work. It
+would take some work to build the missing parts of a real production Ceph DVM,
+but it's all fairly straightforward once the surrounding ADNN issues are worked
+out.
+
+The scripts mostly deal with generating the ADNN hash hint parameters for an RBD
+image. This produces a JSON file that's supplied to the redirector in one of its
+JSON RPC commands. Those scripts also add the ADNN NGUID for the image to its
+metadata (so the NGUID won't change once assigned).
+
+To use that you'll need to start nvmf_tgt on all your OSD nodes, add redirectors
+to them all with the NGUID and size of your RBD image and a path to that image
+as their default target (KRBD, or the rbd bdev), and add that redirector bdev to
+the nvmf subsystem.
+
+These NVMe-oF targets need to be named consistently so they can be described in
+a printf format string to the script here that generates the hash hint
+parameters.
+
+This was tested by adding the hash hint directly to the host redirector with the
+SPDK CLI. The hash hint has now been added to the redirector learning mechanism
+so hosts can learn it from the egress redirectors in the OSD nodes, but hasn't
+been tested yet. Ultimately the hash hint will be added (and updated) in all the
+egress redirectors in all the OSD nodes.
+
+Currently the targets all need to be configured manually in the host redirector
+SPDK app. The redirector needs to be created with a list of default target bdevs
+by name, and those each need to be created with separate
+bdev_nvme_attach_controller commands. This will change when the redirector gains
+the ability to retrieve the actual LN NGUID from prospective targets before
+claiming them (so it won't need to know their names or how many there are in
+advance).
+
+See ./scripts/ceph-poc/nbd_rd_tcp_osds_rd for an example of how ADNN/Ceph was
+set up in our lab.  That script assumes an image named u_img_0 exists and a hint
+file for it has been generated and copied to the host. That image is mapped to
+KRBD on all the OSD nodes. It also assumes that the tgt_tcp_u_img_0 script has
+been run on all the OSD nodes (those OSD nodes are listed in the script, and
+used to generate the attach_controller commands). Those scripts are included
+here as examples, and will have to be modified for your POC setup. You probably
+want to use the rbd bdev instead of KRBD, and hopefully by the time you try it
+your host will be able to learn the hash hint from the targets instead of
+applying it at the host.
+
+6	Redirector source code organization
+
+This section is describes the major sections of the redirector bdev code, and
+highlights some current issues and anticipated changes.
+
+It might be easier to review this patch by visiting the source files in the
+order below. Hopefully these notes will help walk reviewers through the
+important flows and get a sense of the basic layout of the redirector logic.
+
+6.1 vbdev_redirector.c
+
+The redirector is configured and created in this file. A redirector is
+configured by the construct_redirector_bdev command (which of course needs to be
+updated to use the new SPDK command name convention). That must specify at least
+one default target, and a name. The redirector bdev isn't created until all the
+default targets appear. Default targets are identified by bdev name.
+
+When configured the redirector searches for its targets that already exist by
+attempting to open them by name. It looks for targets created after it's
+configured via the examine_config() callback. In both cases it attempts to
+register the target via vbdev_redirector_register_target(), which in the startup
+case comes back to vbdev_redirector_register(). There we test whether all the
+required targets are registered (all default targets are required, those added
+separately might not be).  If the redirector has authoritative hints (host
+redirectors won't) then vbdev_redirector_register won't start the redirector
+until the targets of those hints are configured.
+
+This pattern of registering configured targets and starting the bdev when they
+appear was copied from a previous version of the raid bdev.
+
+For host redirectors we'd rather identify default targets by the LN NGUID. In
+any redirector we'd like to be able to identify any target by LN NGUID or
+NQN. Since this was implemented, SPDK has added the examine_disk callback. In
+examine_disk() a bdev can read from and send admin commands to its candidate
+base bdevs before claiming them. The redirector can inspect bdevs in
+examine_disk() as they come up, and claim the ones with NVMe namespace NGUIDs
+that match theirs. This will be one of the first things to change soon. Egress
+redirectors at least will still need the ability to specify specific bdevs as
+targets, but most host redirectors will only care about the targets' persistent
+global IDs.
+
+If redirector registration has what it needs to proceed, it determines whether
+it will inherit any of its unspecified bdev properties (size, alignment,
+persistent identifiers) from one of its targets. It then brings the redirector
+up and starts making its targets available to the redirector data path by
+assigning them an internal target index and beginning the process of opening and
+identifying them. This starts in redirector_assign_target_index(), which
+normally begins sending async nvme admin commands to all registered targets.
+
+The redirector registration process continues in
+vbdev_redirector_register_continue() when the number of in-flight NVMe admin
+commands reaches zero. It uses the
+redirector_schedule_tgt_adm_cmd_in_flight_cpl() mechanism for this, which we'll
+cover later. It may not have a uuid until this point, where we'll have finished
+identifying targets and retrieving their LN NGUIDs. This may also be where the
+data plane rule table is first generated (which we need before we can complete
+any IO). Here we update the rule table with the hints we've learned from the
+targets that are connected so far, and apply that to the data plane with
+vbdev_redirector_update_channel_state(). That provides an async completion which
+here will be vbdev_redirector_register_finish(), where we finally decide if all
+this worked and the redirector will register with spdk. If not it self
+destructs.
+
+Ultimately we may like the ability to create a redirector bdev automatically
+when an NVMe bdev for a remote redirector is created. When enabled, after the
+construct_nvme_bdev RPC completed all the individual namespace bdevs this
+produced that identified as ADNN LNs would be added as targets to the local
+redirector bdev with that NGUID (creating it if necessary). These redirector
+bdevs would delete themselves when all the target namespaces were removed.
+
+6.2 vbdev_redirector_targets.c
+
+Here we manage the set of configured targets for a redirector. This includes
+managing and searching the list itself. For this we use a glib2 GSequence. We
+use GSequences in many places.  They have list semantics, but are actually trees
+so most lookups take log time. Targets are known both by their bdev name and
+(sometimes) by their NQN. This module maintains two GSequences for this that
+refer to the same set of target objects.
+
+The GSequence objects would require locks if we called them from more than one
+thread, but we don't. You'll see later that the POC implementation of the data
+plane's mapper table (LBA to target map) also used a GSequence. That worked well
+enough (I'm not sure it needs to be any faster) that it's still here. In that
+special case a copy of the GSequence is created for the channel functions to
+read. When we update the mapper table that GSequence is replaced and the old one
+freed.
+
+Adding and removing targets while the redirector is running involves a little
+dance with the channels and the rule table. Targets get added to the running
+state by RPC or by appearing while a running redirector is expecting them. The
+RPC path comes to redirector_add_target here which adds it to the
+configuration. If it exists or shows up later, that goes to
+vbdev_redirector_register_target(). There the process of opening and identifying
+the new target proceeds just like it did for the targets present when the
+redirector started. It uses the same completion mechanism triggered when all the
+admin commands complete (or fail) to trigger
+vbdev_redirector_register_target_continue(), which also updates the rule table
+and pushes it out to the channels. That also schedules a finish callback
+(vbdev_redirector_register_target_finish), which in the target register case
+only logs an occasionally helpful debug message.
+
+Targets get removed via RPC or the hotplug callback. Those both come to
+redirector_remove_target here, but the hotplug path will specify the target and
+the hints referring to it should remain configured (otherwise they're all
+removed). This marks the target as removing, which causes the next rule table
+update to ignore (non-auth) hints pointing to it. It then updates the rule table
+and pushes the new state out to the channels. On completion there will be zero
+in flight IOs to this target.  If it's an auth target there may still be LBAs
+mapped to it but the target QD will be zero so they'll all be queued until the
+DVM acts to correct that. At this point redirector_remove_target_cpl is triggered,
+which may release this target index for reuse.
+
+The redirector_remove_target function takes a callback, which is invoked in
+_cpl(). The target remove RPC uses this to block its completion until the target
+is actually removed. Most other redirector RPCs complete immediately and then
+start trying to make it so. Target removal is something a DVM might need to know
+is completed. On RPC completion, all IO to that target is complete and no more
+will be issued. IO that was queued for it is re-targeted using the updated mapper
+table (which no longer refers to the removed target).
+
+6.3 vbdev_redirector_target_state.c
+
+This is where targets are actually opened and identified. Identification
+requires sending SPDK_NVME_IDENTIFY_CTRLR and
+SPDK_NVME_IDENTIFY_NS_ID_DESCRIPTOR_LIST to get the NQN of the target and the
+persistent IDs (NGUID) of the namespace.
+
+We also attempt to read the ADNN location hint log page. If that succeeds and
+returns a valid location hint log page structure, the target is a redirector. If
+not, the target is not a redirector, which means it can't be a default
+target. This is one of the things that can go wrong during redirector startup
+where the default bdevs we were given appear and are functional, but turn out
+not to be the namespace we were looking for. We do this via
+vbdev_redirector_get_hints(), which is in vbdev_redirector_hint_learning.c
+
+6.4 vbdev_redirector_hints.c
+
+Here we manage the set of configured and learned location hints. The RPC calls
+for adding and removing simple and hash hints come here, and so does the
+callback for adding a learned hint. When hints are added or removed these
+functions generally cause the mapper table to be regenerated and schedule it to
+be pushed to the data plane, but they don't wait for that to complete. As we'll
+see in the data plane module, that mechanism handles ensuring that an
+in-progress channel state update finishes before the next starts.
+
+This module maintains all the hints in a GSequence. It keeps that GSequence
+sorted in an order that makes it searchable by LBA and returns the hint with
+the smallest LBA range that includes the query LBA. The next sort keys enable
+one or two other common lookups to complete in log time, but there are some that
+require an exhaustive search. See location_hint_data_and_target_compare().
+
+6.5 vbdev_redirector_target_admin_cmd.c
+
+Here we handle sending NVME admin commands to targets, and the mechanism that
+enables us to schedule callbacks when they all complete.
+
+It's sometimes important to know that when these callbacks run there is no
+guarantee there are still zero admin commands in flight, only that the count
+reached zero since the callback was scheduled. If that's important, a callback
+might need to reschedule itself or otherwise ensure no more admin commands are
+sent before it runs.
+
+6.6 vbdev_redirector_process_nvme_admin.c
+
+Here we respond to the admin commands a connected host would use to recognize
+and use an ADNN target.
+
+We respond to IDENTIFY_CTRLR because a redirector may be connected to us with
+the bdev interface, and the SPDK NVMF controller will not be present in that
+path. If the connection is over NVMF, the NVMF controller will respond to that
+and the redirector bdev won't see this command.
+
+We respond to IDENTIFY_NS for the same reason.
+
+We respond to GET_LOG_PAGE so peer redirectors can read our location hints. This
+includes the separate log pages used by the hash hint for the hash table and NQN
+list.
+
+6.7 vbdev_redirector_nvme_hints.c
+
+Here we encode ADNN hints into the location hint log page. The contents of these
+pages are generated when they might change, and returned for any GET_LOG_PAGE
+for the corresponding ADNN log page (hints, hash table, NQN list).
+
+The original plan was for redirectors to send streams of location hints to their
+connected hosts. Each host would get a different stream of hints tailored to
+apply to that hosts most recent IO. A bdev can't tell what connected host is
+reading its log pages or doing IO to it, so a redirector bdev can't really do
+that. The location hint log page includes a flag indicating whether its current
+contents replace all prior hints form this host, or should be appended to them
+(replacing any previous hints they exactly natch in extent). The redirector bdev
+always sets this to indicate the hint log page completely replaces the previous
+copy. So location hints from this bdev are "broadcast", not streamed.
+
+It's not entirely clear that we need hints to be streamed after all. If we do
+there will be work needed to enable that.
+
+The ADNN log pages generally include a header with a generation number or an MD5
+hash or both. Connected hosts use these when polling for changes to determine if
+the page contents changed.
+
+A DVM may export many RBD images from a given OSD pool, and any connected host
+may use several of these. RBD images in the same pool will have identical
+contents in their hash table and NQN list log pages. An ADNN host can't know
+whether the LNs are in the same OSD pool or not, and a DVM may export LNs to
+sets of hosts that change. So these hash table and NQN list log pages need to be
+included in every LN that uses them. The Ceph DVM needs to include them in all
+its egress targets. Hosts need to read all of them when something changes. There
+may be 100+ NQNs in the NQN table, and 1000's of buckets in the hash table. The
+MD5 hash in the header of these log pages enable hosts to recognize identical
+tables by reading the header of the page.
+
+6.7 vbdev_redirector_hint_learning.c
+
+Here hints are learned from targets. This module marshals them the opposite
+direction from the one above.
+
+When hints are sent from a redirector bdev, it can't send an async notification
+when they change. For this reason, we poll for hint updates.
+
+Since the redirector bdev can't distinguish individual log page readers, it
+can't use the NVMe event retain/clear mechanism in the log page read to detect
+when the host has finished reading the page. So a redirector bdev really can't
+defer changing the log page contents until each host has finished reading
+it. For this reason, the process of reading these log pages (will eventually)
+include a final step where the generation number and/or hash in the header is
+read again to see if the page contents changed while they were being read (in a
+series of 4 or 8K chunks).
+
+6.8 vbdev_redirector_data_plane.c
+
+This is where the actual IO delivery to targets occurs. This is where the
+redirector's channel functions are defined and the channel state update
+management occurs.
+
+Each channel has its own copy of the mapper table and the target table. The
+mapper table has been described above, and here we just replace it when the
+channel is updated. It's a complex data structure (currently a glib2 GSequence)
+that is only accessed by channel functions (currently each channel has its own
+copy, but that's a workaround for something that should go away) which only read
+it. The mapper table refers to targets by their target index.
+
+The target table in each channel tracks the IOs in flight to or queue for each
+target. The redirector data plane implements a per-target QD. We'd really like a
+per-hint QD. The idea there is that once an IO is dispatched to a target it's
+too late to change your mind about which target it goes to. Therefore it might
+make sense to limit the number of in-flight IOs to default targets, or targets
+that identify themselves as last resorts. IO to these is probably going to be
+slow anyway, so the host may benefit from limiting that and increasing the
+chance of a hint naming a better target appearing. This isn't as important in
+ADNN systems that can describe LN placement in a small number of hints, since
+hosts are likely to get them early and make fewer bad target choices.
+
+The channel update process includes a target drain mechanism. This is used to
+remove targets by first marking them all as draining in one spdk_foreach_channel
+pass (which also replaces the mapper table with one that doesn't send any new IO
+to the draining target), then waiting them to drain and removing the target in a
+second pass. The second pass doesn't advance until the current channel finishes
+draining all training targets. When it does, the target is closed in the channel
+and marked invalid in its target table.
+
+During this process in which the mapper table may be replaced in the channel and
+some targets bay be added or get marked for drain, all IO queued for any target
+in that channel is collected (removed from the target queue) and the target
+selection phase of IO dispatch is repeated for all of them (the order of the
+individual channel queues is preserved, but that doesn't necessarily preserve the
+order they arrived at the bdev in).
+
+Target selection is normally done for each IO as it arrives at the redirector,
+and the IO is either dispatched to the selected target or queued if the target
+QD has been reached. This is where IO for unavailable auth targets gets queued
+until the DVM corrects the problem. Failed or unavailable targets will have a QD
+of zero. When that's sorted, the channel update re-targets all those queued IOs
+for either the now functional auth target, or some other target indicated by the
+(possibly new) mapper table.
+
+The channel update mechanism also includes stats collection from the
+channels. The bdev stats JSON command can be abused to wait for the redirector
+channel update to finish in a script. The redirector tests use this.
+
+6.9 vbdev_redirector_null_hash.c and vbdev_redirector_ceph_hash.c
+
+These files implement the hash functions supported by the consistent hash
+hint. The NULL hash is just a template for these. The redirector tests use it to
+ensure hints can refer to different hash functions by name. The Ceph hash
+actually works with Ceph. The hash hint hash function modules include both the
+hash function used by each, and their mod function (which is not always an
+integer mod).
+
+The ADNN hash hint is intended to support multiple hash functions. The idea is
+to define an ID space for these like the other NVMe ID spaces with some
+specified in the (eventual) ADNN spec, others appearing in later revisions of
+the spec, and a range set aside for vendor specific hash functions.
+
+This is also true for the ADNN hint type ID space. Vendor specific hints and/or
+hash functions could be defined and sent by a DVM. Hosts that didn't understand
+them would ignore them. A DVM could send multiple types of hints (or multiple
+forms of the hash hint) for the same LN (or LN extent) and hosts would use
+whichever ones they understood. If they understand more than one, they choose
+which they use. You'd expect a host that supported a new or vendor specific hint
+type and received that and an older hint type would know whether it preferred
+the new or vendor specific hint over the old standard one. Among the issues to
+work out here in public with potential users of ADNN is whether the hints
+supported by a host should be communicated to the redirector as a negotiated
+option (and vice versa). This might be problematic for the redirector bdev which
+can't tell who is talking to it.

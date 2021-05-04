@@ -52,6 +52,7 @@ struct spdk_vbdev_split_config {
 	char *base_bdev;
 	unsigned split_count;
 	uint64_t split_size_mb;
+	bool share;
 
 	SPDK_BDEV_PART_TAILQ splits;
 	struct spdk_bdev_part_base *split_base;
@@ -243,6 +244,10 @@ vbdev_split_create(struct spdk_vbdev_split_config *cfg)
 	}
 
 	if (cfg->split_size_mb) {
+		if (cfg->share) {
+			SPDK_ERRLOG("Split size must be zero when shared flag present\n");
+			return -EINVAL;
+		}
 		if (((cfg->split_size_mb * mb) % base_bdev->blocklen) != 0) {
 			SPDK_ERRLOG("Split size %" PRIu64 " MB is not possible with block size "
 				    "%" PRIu32 "\n",
@@ -253,21 +258,32 @@ vbdev_split_create(struct spdk_vbdev_split_config *cfg)
 		SPDK_DEBUGLOG(SPDK_LOG_VBDEV_SPLIT, "Split size %" PRIu64 " MB specified by user\n",
 			      cfg->split_size_mb);
 	} else {
-		split_size_blocks = base_bdev->blockcnt / cfg->split_count;
-		SPDK_DEBUGLOG(SPDK_LOG_VBDEV_SPLIT, "Split size not specified by user\n");
+		if (cfg->share) {
+			split_size_blocks = base_bdev->blockcnt;
+		} else {
+			split_size_blocks = base_bdev->blockcnt / cfg->split_count;
+			SPDK_DEBUGLOG(SPDK_LOG_VBDEV_SPLIT, "Split size not specified by user\n");
+		}
 	}
 
-	max_split_count = base_bdev->blockcnt / split_size_blocks;
 	split_count = cfg->split_count;
-	if (split_count > max_split_count) {
-		SPDK_WARNLOG("Split count %" PRIu64 " is greater than maximum possible split count "
-			     "%" PRIu64 " - clamping\n", split_count, max_split_count);
-		split_count = max_split_count;
-	}
+	if (cfg->share) {
+		max_split_count = cfg->split_count;
+		SPDK_DEBUGLOG(SPDK_LOG_VBDEV_SPLIT,
+			      "base_bdev: %s split_count: %"PRIu64" shared\n",
+			      spdk_bdev_get_name(base_bdev), split_count);
+	} else {
+		max_split_count = base_bdev->blockcnt / split_size_blocks;
+		if (split_count > max_split_count) {
+			SPDK_WARNLOG("Split count %" PRIu64 " is greater than maximum possible split count "
+				     "%" PRIu64 " - clamping\n", split_count, max_split_count);
+			split_count = max_split_count;
+		}
 
-	SPDK_DEBUGLOG(SPDK_LOG_VBDEV_SPLIT, "base_bdev: %s split_count: %" PRIu64
-		      " split_size_blocks: %" PRIu64 "\n",
-		      spdk_bdev_get_name(base_bdev), split_count, split_size_blocks);
+		SPDK_DEBUGLOG(SPDK_LOG_VBDEV_SPLIT, "base_bdev: %s split_count: %" PRIu64
+			      " split_size_blocks: %" PRIu64 "\n",
+			      spdk_bdev_get_name(base_bdev), split_count, split_size_blocks);
+	}
 
 	TAILQ_INIT(&cfg->splits);
 	cfg->split_base = spdk_bdev_part_base_construct(base_bdev,
@@ -299,6 +315,9 @@ vbdev_split_create(struct spdk_vbdev_split_config *cfg)
 			goto err;
 		}
 
+		SPDK_DEBUGLOG(SPDK_LOG_VBDEV_SPLIT,
+			      "split: %s offset=%"PRIu64" blocks=%"PRIu64"\n",
+			      name, offset_blocks, split_size_blocks);
 		rc = spdk_bdev_part_construct(d, cfg->split_base, name, offset_blocks, split_size_blocks,
 					      "Split Disk");
 		free(name);
@@ -310,7 +329,9 @@ vbdev_split_create(struct spdk_vbdev_split_config *cfg)
 			goto err;
 		}
 
-		offset_blocks += split_size_blocks;
+		if (!cfg->share) {
+			offset_blocks += split_size_blocks;
+		}
 	}
 
 	return 0;
@@ -367,7 +388,7 @@ vbdev_split_config_find_by_base_name(const char *base_bdev_name)
 
 static int
 vbdev_split_add_config(const char *base_bdev_name, unsigned split_count, uint64_t split_size,
-		       struct spdk_vbdev_split_config **config)
+		       bool share, struct spdk_vbdev_split_config **config)
 {
 	struct spdk_vbdev_split_config *cfg;
 	assert(base_bdev_name);
@@ -404,6 +425,7 @@ vbdev_split_add_config(const char *base_bdev_name, unsigned split_count, uint64_
 
 	cfg->split_count = split_count;
 	cfg->split_size_mb = split_size;
+	cfg->share = share;
 	TAILQ_INSERT_TAIL(&g_split_config, cfg, tailq);
 	if (config) {
 		*config = cfg;
@@ -465,7 +487,7 @@ vbdev_split_init(void)
 			}
 		}
 
-		rc = vbdev_split_add_config(base_bdev_name, split_count, split_size, NULL);
+		rc = vbdev_split_add_config(base_bdev_name, split_count, split_size, false, NULL);
 		if (rc != 0) {
 			goto err;
 		}
@@ -512,6 +534,7 @@ vbdev_split_config_json(struct spdk_json_write_ctx *w)
 		spdk_json_write_named_string(w, "base_bdev", cfg->base_bdev);
 		spdk_json_write_named_uint32(w, "split_count", cfg->split_count);
 		spdk_json_write_named_uint64(w, "split_size_mb", cfg->split_size_mb);
+		spdk_json_write_named_bool(w, "share", cfg->share);
 		spdk_json_write_object_end(w);
 
 		spdk_json_write_object_end(w);
@@ -521,12 +544,13 @@ vbdev_split_config_json(struct spdk_json_write_ctx *w)
 }
 
 int
-create_vbdev_split(const char *base_bdev_name, unsigned split_count, uint64_t split_size_mb)
+create_vbdev_split(const char *base_bdev_name, unsigned split_count, uint64_t split_size_mb,
+		   bool share)
 {
 	int rc;
 	struct spdk_vbdev_split_config *cfg;
 
-	rc = vbdev_split_add_config(base_bdev_name, split_count, split_size_mb, &cfg);
+	rc = vbdev_split_add_config(base_bdev_name, split_count, split_size_mb, share, &cfg);
 	if (rc) {
 		return rc;
 	}

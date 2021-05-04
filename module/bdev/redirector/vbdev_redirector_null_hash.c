@@ -1,7 +1,6 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (C) 2008-2012 Daisuke Aoyama <aoyama@peach.ne.jp>.
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
  *
@@ -32,44 +31,23 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+/*
+ * Implements the NULL hash function for the consistent hash hint. This isn't
+ * useful in real ADNN systems, but is used in testing and serves as a template
+ * for adding hash functions for new storage back-ends.
+ */
+
 #include "spdk/stdinc.h"
 
-#include <openssl/md5.h>
+#include "vbdev_redirector_types.h"
+#include "vbdev_redirector_null_hash.h"
+#include "spdk_internal/log.h"
 
-#include "iscsi/md5.h"
-
-int md5init(struct spdk_md5ctx *md5ctx)
+int vbdev_redirector_get_null_hash_bucket_for_object(struct redirector_bdev *rd_node,
+		const struct location_hint *hint,
+		const uint64_t object_number,
+		uint64_t *bucket_number)
 {
-	int rc;
-
-	if (md5ctx == NULL) {
-		return -1;
-	}
-	rc = MD5_Init(&md5ctx->md5ctx);
-	return rc;
-}
-
-int md5final(void *md5, struct spdk_md5ctx *md5ctx)
-{
-	int rc;
-
-	if (md5ctx == NULL || md5 == NULL) {
-		return -1;
-	}
-	rc = MD5_Final(md5, &md5ctx->md5ctx);
-	return rc;
-}
-
-int md5update(struct spdk_md5ctx *md5ctx, const void *data, size_t len)
-{
-	int rc;
-
-	if (md5ctx == NULL) {
-		return -1;
-	}
-	if (data == NULL || len == 0) {
-		return 0;
-	}
-	rc = MD5_Update(&md5ctx->md5ctx, data, len);
-	return rc;
+	*bucket_number = object_number % hint->hash.hash_table->num_buckets;
+	return 0;
 }

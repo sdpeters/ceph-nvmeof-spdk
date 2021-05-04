@@ -2799,6 +2799,86 @@ Example response:
 }
 ~~~
 
+## construct_redirector_bdev {#rpc_construct_redirector_bdev}
+
+Create redirector bdev.
+
+### Parameters
+
+Name                    | Optional | Type              | Description
+----------------------- | -------- | ----------------- | -----------
+name                    | Required | string            | Bdev name
+default_target_names    | Required | array of strings  | Default target bdev nams
+
+### Result
+
+Name of newly created bdev.
+
+### Example
+
+Example request:
+
+~~~
+{
+  "params": {
+    "name": "Redirector0",
+    "default_target_names": [
+        "RemoteRedirector0",
+        "RemoteRedirector1"
+    ]
+  },
+  "jsonrpc": "2.0",
+  "method": "construct_redirector_bdev",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+## delete_redirector_bdev {#rpc_delete_redirector_bdev}
+
+Delete redirector bdev.
+
+### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Bdev name
+
+### Example
+
+Example request:
+
+~~~
+{
+  "params": {
+    "name": "Redirector0"
+  },
+  "jsonrpc": "2.0",
+  "method": "delete_redirector_bdev",
+  "id": 1
+}
+
+~~~
+
+Example response:
+
+~~~
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
 ## bdev_virtio_attach_controller {#rpc_bdev_virtio_attach_controller}
 
 Create new initiator @ref bdev_config_virtio_scsi or @ref bdev_config_virtio_blk and expose all found bdevs.

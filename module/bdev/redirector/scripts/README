@@ -1,0 +1,40 @@
+These are the scripts needed to generate the parameters for an ADNN hash hint for
+RBD images in your Ceph cluster.
+
+For each image that will be accessed via ADNN, run:
+
+rbd-properties-json.sh <imagespec> <properties-file>
+
+... then:
+
+rbd-hash-hint <properties-file> <nqn format string> > <hint-file>
+
+This will invoke various Ceph CLI commands, like "rbd info". Ensure those work
+(e.g. they find ceph.conf, etc.) before running this.
+
+Imagespec is: [<pool>/[<namespace>/]]<image>
+
+<image> is an RBD image name
+<pool> is the optional OSD pool name
+<namespace> is the optional RBD namespace name (unrelated to NVMe namespaces)
+
+<nqn format string> is a string like 'nqn.2019-11-14.com.intel.nemo:%s-rdma',
+where %s is replaced by the OSD host name (lower case).
+
+<hint-file> will be used to add the hash hint to an SPDK redirector bdev (in
+an nvmf_tgt app on each OSD node), like:
+
+rpc.py redirector_add_hash_hint --redirector <name> --hash_hint_file <hint-file>
+
+The nvmf_tgt app in each OSD node would have one redirector bdev for each RBD
+image exposed via ADNN.
+
+An NVMe NGUID is assigned to each RBD image. The rbd-properties-json.sh script
+will generate one and store it in the image metadata ("nemo_ln_nguid"), or use
+the existing one if that's already been done. This NGUID is included in the hint
+file and becomes the NGUID for the NVMe namespace containing this RBD image.
+
+The hint file includes an object called 'label', which is ignored by the redirector.
+It contains clues for users, and some fields that a script could use to determine
+if the hint needed updating (e.g. if osdmap_epoch changed). It's harmless to update
+a hash hint even if it didn't change.
